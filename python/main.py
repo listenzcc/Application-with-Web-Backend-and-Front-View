@@ -1,26 +1,59 @@
-#!/usr/bin/env python3
-"""This is just a simple authentication example.
-
-Please see the `OAuth2 example at FastAPI <https://fastapi.tiangolo.com/tutorial/security/simple-oauth2/>`_  or
-use the great `Authlib package <https://docs.authlib.org/en/v0.13/client/starlette.html#using-fastapi>`_ to implement a classing real authentication system.
-Here we just demonstrate the NiceGUI integration.
-"""
-from nicegui.page import page
-from nicegui import Client
+# %%
 import contextlib
+
 from typing import Optional
+from nicegui import Client
+from nicegui import app, ui
+from nicegui.page import page
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nicegui import app, ui
-# from components.footer import with_footer
+from auth.models import RoleEnum
+from auth.database import DatabaseManager
+from auth.decorators import AuthContext, require_permission, require_role
+from auth.user_service import UserService
+from auth.auth_manager import PermissionManager
+
 from components.layout import with_layout
 
-# in reality users passwords would obviously need to be hashed
-passwords = {'user1': 'pass1', 'user2': 'pass2'}
+# %%
+# Auth system
 
+# Auth db
+# 1. 初始化数据库
+db_manager = DatabaseManager('sqlite:///auth.db', echo=False)
+db_manager.create_tables()
+db_manager.initialize_data()
+
+# 2. 创建服务实例
+session = db_manager.get_session()
+user_service = UserService(session)
+permission_manager = PermissionManager(session)
+auth_context = AuthContext(user_service, permission_manager)
+
+try:
+    # 3. 创建测试用户
+    # 创建普通用户
+    user1 = user_service.create_user(
+        username="testuser",
+        # email="user@example.com",
+        password="password123",
+        role=RoleEnum.USER.value
+    )
+
+    # 创建访客
+    guest = user_service.create_user(
+        username="guest",
+        # email="guest@example.com",
+        password="guest123",
+        role=RoleEnum.GUEST.value
+    )
+except:
+    pass
+
+# Auth middle ware
 unrestricted_page_routes = {'/login', '/welcomepage'}
 
 
@@ -45,7 +78,58 @@ def make_it_center():
     return
 
 
-@ui.page('/profilepage')
+@ui.page('/privilege')
+@with_layout
+async def privilege_page():
+    ui.label('Privilege page')
+
+    user = user_service.get_user_by_id(app.storage.user['id'])
+
+    ui.label(f'Username: {user.username}, role: {user.role}')
+
+    # View users
+    if permission_manager.check_permission(user, 'view_users'):
+        view_users_card = ui.card()
+
+        def update_view_users_card():
+            users = user_service.list_users()
+            view_users_card.clear()
+            with view_users_card:
+                for u in users:
+                    ui.label(
+                        f'- {u.username} ({u.role}) - Alive: {u.is_active}')
+        update_view_users_card()
+
+        ui.button('Refresh', on_click=update_view_users_card)
+
+    # Signup
+    if permission_manager.check_permission(user, 'create_user'):
+        def try_signup():
+            if user_service.create_user(
+                username=username.value,
+                email=email.value,
+                password=password.value,
+                role=role.value
+            ):
+                ui.notify('Signup successfully.')
+                try:
+                    update_view_users_card()
+                except:
+                    pass
+            else:
+                ui.notify('Signup failed.', color='negative')
+
+        with ui.card():
+            ui.label('SignUp')
+            username = ui.input('Username').on('keydown.enter', try_signup)
+            password = ui.input('Password', password=True, password_toggle_button=True).on(
+                'keydown.enter', try_signup)
+            role = ui.select(['user', 'guest'], label='role', value='guest')
+            email = ui.input('Email').on('keydown.enter', try_signup)
+            ui.button('SignUp', on_click=try_signup)
+
+
+@ui.page('/profile')
 @with_layout
 async def profile_page() -> None:
     ui.label('Profile page')
@@ -100,9 +184,13 @@ async def welcome_page():
 @with_layout
 async def login(redirect_to: str = '/') -> Optional[RedirectResponse]:
     def try_login() -> None:  # local function to avoid passing username and password as arguments
-        if passwords.get(username.value) == password.value:
+        user = user_service.authenticate_user(username.value, password.value)
+        if user is not None:
             app.storage.user.update(
-                {'username': username.value, 'authenticated': True})
+                {'username': username.value,
+                 'authenticated': True,
+                 'id': user.id
+                 })
             # go back to where the user wanted to go
             ui.navigate.to(redirect_to)
         else:
@@ -160,3 +248,5 @@ async def exception_handler_404(request: Request, exception: Exception):
 
 if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root, storage_secret='THIS_NEEDS_TO_BE_CHANGED')
+
+# %%

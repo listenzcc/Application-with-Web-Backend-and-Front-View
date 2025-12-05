@@ -40,6 +40,8 @@ def create_header():
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('Pricing', '/pricing',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
+                    ui.link('Privilege', '/privilege',
+                            ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
 
             # 右侧：用户信息和操作（右上角）
             create_user_info_section()
