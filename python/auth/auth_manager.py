@@ -29,7 +29,8 @@ class PermissionManager:
         # 管理权限
         'manage_permissions': '管理权限',
         'view_logs': '查看日志',
-        'manage_system': '管理系统设置'
+        'manage_system': '管理系统设置',
+        'manage_sessions': '管理登陆会话'
     }
 
     # 角色默认权限
