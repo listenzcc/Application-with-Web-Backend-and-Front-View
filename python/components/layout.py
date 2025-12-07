@@ -36,9 +36,9 @@ def create_header():
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('Products', '/products',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Services', '/services',
+                    ui.link('Cases', '/cases',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Pricing', '/pricing',
+                    ui.link('GasExplorer', '/gasExplorer',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('Privilege', '/privilege',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
@@ -63,7 +63,6 @@ def create_user_info_section():
                 with ui.column().classes('items-end'):
                     ui.label(f'Hello, {username}').classes(
                         'text-sm font-medium text-gray-700')
-                    ui.label('欢迎回来！').classes('text-xs text-gray-500')
 
                 # 用户头像图标
                 ui.icon(
