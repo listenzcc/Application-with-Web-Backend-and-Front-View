@@ -34,7 +34,7 @@ def create_header():
                 with ui.row().classes('gap-6'):
                     ui.link('Home', '/',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Products', '/products',
+                    ui.link('Simulation', '/simulation',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('CaseBrowser', '/caseBrowser',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')

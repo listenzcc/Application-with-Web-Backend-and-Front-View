@@ -804,7 +804,7 @@ async def case_browser_page():
         suffix = file_path.suffix.lower()
 
         # 创建预览对话框
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl'):
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-4xl').classes('items-center'):
             ui.label(f'Preview: {file_path.name}').classes(
                 'text-h6 font-bold mb-3')
 
@@ -981,6 +981,30 @@ def serve_pdf(case_name: str):
         return app.redirect('/404')
     from fastapi.responses import FileResponse
     return FileResponse(file_path, media_type='application/pdf')
+
+
+@app.get('/map')
+def show_map():
+    html_content = Path('html/map.html').read_text(encoding='utf-8')
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html_content)
+
+
+@ui.page('/simulation')
+@with_layout
+async def simulation_page():
+    with ui.card().classes('w-full h-full p-0 m-0').classes('items-center'):
+        # 嵌入iframe来显示地图页面
+        ui.html(f'''
+<div id='mapdiv'>
+    <iframe 
+        src="/map" 
+        style="width: 800px; height: 800px; border: none;"
+        title="地图"
+    ></iframe>
+</div>
+''', sanitize=False)
+    return
 
 
 if __name__ in {'__main__', '__mp_main__'}:
