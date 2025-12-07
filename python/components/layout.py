@@ -36,7 +36,7 @@ def create_header():
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('Products', '/products',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Cases', '/cases',
+                    ui.link('CaseBrowser', '/caseBrowser',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('GasExplorer', '/gasExplorer',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
