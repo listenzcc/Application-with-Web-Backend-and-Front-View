@@ -20,11 +20,18 @@ from auth.decorators import AuthContext, require_permission, require_role
 from auth.user_service import UserService
 from auth.auth_manager import PermissionManager
 
+from sensors.sensor_reader import SensorDataReader
+from sensors.ui import SensorsUI
+
 from util.user_session_manager import UserSessionManager
 
 from explorer.toxic_gas import ToxicGasDatabase
 
 from components.layout import with_layout
+
+# %%
+# Sensors data
+# sensor_data_reader = SensorDataReader()
 
 # %%
 # Add static directory - This must be done BEFORE any UI elements
@@ -883,6 +890,19 @@ async def profile_page() -> None:
     return
 
 
+@ui.page('/sensors')
+@with_layout
+async def sensors_page():
+    ui.label('Sensors page')
+
+    # 创建数据读取器实例
+    reader = SensorDataReader()
+    ui_manager = SensorsUI(reader)
+
+    # 创建页面
+    await ui_manager.create_sensors_page()
+
+
 @ui.page('/')
 @with_layout
 async def root():
@@ -1014,7 +1034,8 @@ async def simulation_page():
 
 if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
-           reload=True,
+           #    reload=True,
+           reload=False,
            #    frameless=True,
            storage_secret='listenzcc')
 
