@@ -17,6 +17,20 @@ def with_layout(func: Callable) -> Callable:
         # 添加公共footer
         create_footer()
 
+        ui.add_head_html('''
+        <style>
+            body {
+                background-color: #f0f0f0;
+                background-image: url('/static/img/background.avif');
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+                background-blend-mode: overlay;
+            }
+        </style>
+        ''')
+
     return wrapper
 
 
@@ -124,7 +138,7 @@ def create_footer():
                 with ui.column():
                     ui.label('MyApp').classes(
                         'text-xl font-bold text-gray-800 mb-2')
-                    ui.label('Making your life easier with our amazing products.').classes(
+                    ui.label('Relax and take a very deep breathe.').classes(
                         'text-gray-600')
                     with ui.row().classes('gap-3 mt-3'):
                         ui.button(

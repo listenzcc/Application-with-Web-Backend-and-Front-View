@@ -27,6 +27,11 @@ from explorer.toxic_gas import ToxicGasDatabase
 from components.layout import with_layout
 
 # %%
+# Add static directory - This must be done BEFORE any UI elements
+app.add_static_files('/static', 'static')  # URL path, local folder %%
+
+
+# %%
 # Gas explorer data
 gas_db = ToxicGasDatabase()
 
@@ -622,7 +627,7 @@ async def privilege_page():
 async def gas_explorer_page():
     ui.label('Gas explorer page')
 
-    with ui.card().classes('w-full shadow-lg rounded-lg'):
+    with ui.card().classes('w-full shadow-lg rounded-lg').style('background:#fafafaa0'):
         # ui.label('Gas explorer').classes('text-h4 font-bold text-primary')
 
         _ui = GasManagementUI()
