@@ -1,4 +1,5 @@
 # %%
+import json
 import contextlib
 import pandas as pd
 
@@ -11,7 +12,7 @@ from nicegui import app, ui
 from nicegui.page import page
 
 from fastapi import Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth.models import RoleEnum
@@ -21,6 +22,7 @@ from auth.user_service import UserService
 from auth.auth_manager import PermissionManager
 
 from sensors.sensor_reader import SensorDataReader
+from sensors.sensor_writer import SensorDataWriter
 from sensors.ui import SensorsUI
 
 from util.user_session_manager import UserSessionManager
@@ -895,9 +897,19 @@ async def profile_page() -> None:
 async def sensors_page():
     ui.label('Sensors page')
 
+    this_user = user_service.get_user_by_id(app.storage.user['id'])
+    checks = [
+        'create_content',
+        'edit_content',
+        'delete_content'
+    ]
+    rights = {e: permission_manager.check_permission(
+        this_user, e) for e in checks}
+
     # 创建数据读取器实例
     reader = SensorDataReader()
-    ui_manager = SensorsUI(reader)
+    writer = SensorDataWriter()
+    ui_manager = SensorsUI(reader, writer, rights)
 
     # 创建页面
     await ui_manager.create_sensors_page()
@@ -1004,15 +1016,21 @@ def serve_pdf(case_name: str):
     # 检查文件是否存在且是PDF
     if not file_path.exists():
         return app.redirect('/404')
-    from fastapi.responses import FileResponse
     return FileResponse(file_path, media_type='application/pdf')
 
 
 @app.get('/map')
 def show_map():
     html_content = Path('html/map.html').read_text(encoding='utf-8')
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html_content)
+
+
+@app.get('/latest_sensor_data')
+def require_json_latest_sensor_data():
+    reader = SensorDataReader()
+    sensors = reader.get_sensor_info()
+    obj = json.dumps(sensors)
+    return HTMLResponse(obj, media_type='application/json')
 
 
 @ui.page('/simulation')
@@ -1035,8 +1053,9 @@ async def simulation_page():
 if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
            #    reload=True,
-           reload=False,
+           reload=True,
            #    frameless=True,
+           uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
            storage_secret='listenzcc')
 
 # %%

@@ -4,7 +4,7 @@ import time
 import random
 from datetime import datetime, timedelta
 from typing import Optional
-from log import logger
+from .log import logger
 
 
 class SensorDataWriter:
@@ -29,6 +29,37 @@ class SensorDataWriter:
             return True
         except Exception as e:
             logger.error(f"注册传感器失败: {e}")
+            return False
+
+    def delete_sensor(self, sensor_id: str):
+        '''
+        删除指定ID的传感器
+
+        :param self: 类实例
+        :param sensor_id: 要删除的传感器ID
+        :type sensor_id: str
+        :return: 删除成功返回True，失败返回False
+        :rtype: bool
+        '''
+        try:
+            # 执行删除操作
+            self.cursor.execute('''
+                DELETE FROM sensors
+                WHERE sensor_id = ?
+            ''', (sensor_id,))  # 注意这里应该是元组，后面要加逗号
+
+            # 检查是否成功删除了记录
+            if self.cursor.rowcount == 0:
+                logger.warning(f"传感器 {sensor_id} 不存在，无法删除")
+                return False
+
+            self.conn.commit()
+            logger.debug(f"传感器 {sensor_id} 删除成功")
+            return True
+        except Exception as e:
+            logger.error(f'删除传感器失败: {e}')
+            # 发生异常时回滚事务
+            self.conn.rollback()
             return False
 
     def write_sensor_data(self, sensor_id: str, value: float,

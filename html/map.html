@@ -24,7 +24,11 @@
 </head>
 
 <body>
-    <div id="map"></div>
+    <div>
+        <div id="map"></div>
+        <div id="overlap" style="z-index:100; position: fixed">
+        </div>
+    </div>
     <script>
         mapboxgl.accessToken = 'pk.eyJ1IjoibGlzdGVuemNjIiwiYSI6ImNrMzU5MmpxZDAxMXEzbXQ0dnd4YTZ2NDAifQ.GohcgYXFsbDqfsi_7SXdpA';
         const map = new mapboxgl.Map({
@@ -41,6 +45,281 @@
         map.on('style.load', () => {
             map.setFog({});
         });
+
+        // Create and setup canvas after map loads
+        map.on('load', () => {
+            setupCanvasOverlay();
+            setupCanvasOverlay1();
+        });
+
+        function setupCanvasOverlay() {
+            const overlapDiv = document.getElementById('overlap');
+            const mapDiv = document.getElementById('map');
+
+            // Remove existing canvas if any
+            const existingCanvas = overlapDiv.querySelector('canvas');
+            if (existingCanvas) {
+                existingCanvas.remove();
+            }
+
+            // Create canvas element
+            const canvas = document.createElement('canvas');
+            canvas.id = 'overlayCanvas';
+            overlapDiv.appendChild(canvas);
+
+            // Get canvas context
+            const ctx = canvas.getContext('2d');
+
+            // Set canvas dimensions to match the container
+            function resizeCanvas() {
+                canvas.width = mapDiv.offsetWidth;
+                canvas.height = mapDiv.offsetHeight;
+                drawOnCanvas();
+            }
+
+            // Initial resize
+            resizeCanvas();
+
+            // Handle window resize
+            window.addEventListener('resize', resizeCanvas);
+
+            // Handle map movements to update overlay if needed
+            map.on('move', drawOnCanvas);
+            map.on('zoom', drawOnCanvas);
+
+            // Example drawing function
+            function drawOnCanvas() {
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Example: Draw a semi-transparent rectangle
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+                ctx.fillRect(100, 100, 200, 150);
+
+                // Example: Draw a circle
+                ctx.beginPath();
+                ctx.arc(canvas.width / 2, canvas.height / 2, 50, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(0, 0, 255, 0.3)';
+                ctx.fill();
+
+                // Example: Draw text
+                ctx.fillStyle = 'white';
+                ctx.font = '16px Arial';
+                ctx.fillText('Canvas Overlay', canvas.width / 2 - 50, canvas.height / 2);
+
+                // Example: Draw lines
+                ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(canvas.width, canvas.height);
+                ctx.moveTo(canvas.width, 0);
+                ctx.lineTo(0, canvas.height);
+                ctx.stroke();
+
+                // You could also draw based on map coordinates
+                // Example: Draw at a specific geographic location
+                const coordinates = [116.3912757, 39.906217];
+                const pixelPosition = map.project(coordinates);
+
+                ctx.beginPath();
+                ctx.arc(pixelPosition.x, pixelPosition.y, 20, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
+                ctx.fill();
+
+                ctx.fillStyle = 'black';
+                ctx.font = '12px Arial';
+                ctx.fillText('Beijing', pixelPosition.x + 25, pixelPosition.y);
+            }
+
+            // If you want interactive canvas (remove pointer-events: none from CSS)
+            canvas.addEventListener('click', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                console.log(`Canvas clicked at: ${x}, ${y}`);
+
+                // Convert to map coordinates
+                const lngLat = map.unproject([x, y]);
+                console.log(`Map coordinates: ${lngLat.lng}, ${lngLat.lat}`);
+
+                // Draw something at click position
+                ctx.beginPath();
+                ctx.arc(x, y, 15, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 165, 0, 0.5)';
+                ctx.fill();
+            });
+        }
+
+        /**
+         * 独立函数：从指定API获取传感器数据并绘制到指定canvas上
+         * @param {string} apiUrl - 传感器数据API地址
+         * @param {HTMLCanvasElement} canvas - 要绘制的canvas元素
+         * @param {Object} customStyles - 自定义样式（可选）
+         * @returns {Promise<Array>} 返回传感器数据数组
+         */
+        async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
+            // 验证参数
+            if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
+                throw new Error('有效的canvas元素是必需的');
+            }
+
+            try {
+                // 1. 获取传感器数据
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+
+                const sensors = await response.json();
+
+                // 2. 获取canvas上下文
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    throw new Error('无法获取canvas上下文');
+                }
+
+                // 3. 合并默认样式和自定义样式
+                const defaultStyles = {
+                    humidity: {
+                        color: 'rgba(65, 105, 225, 0.8)',
+                        radius: 8,
+                        borderColor: 'rgba(30, 144, 255, 1)',
+                        labelColor: 'white'
+                    },
+                    temp: {
+                        color: 'rgba(220, 20, 60, 0.8)',
+                        radius: 10,
+                        borderColor: 'rgba(255, 69, 0, 1)',
+                        labelColor: 'white'
+                    },
+                    default: {
+                        color: 'rgba(50, 205, 50, 0.8)',
+                        radius: 8,
+                        borderColor: 'rgba(34, 139, 34, 1)',
+                        labelColor: 'white'
+                    },
+                    fontSize: 12,
+                    fontFamily: 'Arial'
+                };
+
+                const styles = { ...defaultStyles, ...customStyles };
+
+                // 4. 清除canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 5. 绘制每个传感器
+                sensors.forEach(sensor => {
+                    drawSingleSensor(ctx, canvas, sensor, styles);
+                });
+
+                // 6. 返回传感器数据供进一步使用
+                return sensors;
+
+            } catch (error) {
+                console.error('绘制传感器数据失败:', error);
+                throw error;
+            }
+        }
+
+        /**
+         * 绘制单个传感器
+         */
+        function drawSingleSensor(ctx, canvas, sensor, styles) {
+            // 确定传感器类型
+            const sensorId = sensor.sensor_id.toLowerCase();
+            let type = 'default';
+
+            if (sensorId.includes('humidity')) {
+                type = 'humidity';
+            } else if (sensorId.includes('temp')) {
+                type = 'temp';
+            }
+
+            const style = styles[type] || styles.default;
+
+            // 转换坐标 (0-1 相对坐标 → 像素坐标)
+            const x = sensor.x_position * canvas.width;
+            const y = sensor.y_position * canvas.height;
+
+            // 保存上下文状态
+            ctx.save();
+
+            // 绘制传感器点
+            drawSensor(ctx, x, y, sensor, style, styles.fontSize, styles.fontFamily);
+
+            // 恢复上下文状态
+            ctx.restore();
+        }
+
+        /**
+         * 绘制单个传感器点的具体实现
+         */
+        function drawSensor(ctx, x, y, sensor, style, fontSize, fontFamily) {
+            // 绘制外圆边框
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius + 2, 0, Math.PI * 2);
+            ctx.fillStyle = style.borderColor;
+            ctx.fill();
+
+            // 绘制内圆主体
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius, 0, Math.PI * 2);
+            ctx.fillStyle = style.color;
+            ctx.fill();
+
+            // 绘制中心点
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius / 3, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+
+            // 绘制传感器ID
+            ctx.fillStyle = style.labelColor;
+            ctx.font = `bold ${fontSize}px ${fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+
+            // 添加文字阴影
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+
+            ctx.fillText(sensor.sensor_id, x, y + style.radius + 8);
+
+            // 可选：绘制最后更新时间
+            if (sensor.last_updated) {
+                const timeText = new Date(sensor.last_updated).toLocaleTimeString();
+                ctx.font = `10px ${fontFamily}`;
+                ctx.fillText(timeText, x, y + style.radius + 25);
+            }
+        }
+
+        // 使用示例：
+        // 在你的setupCanvasOverlay函数中：
+        function setupCanvasOverlay1() {
+            // ... 现有的canvas创建代码 ...
+
+            const canvas = document.getElementById('overlayCanvas');
+
+            // 初始绘制
+            drawSensorsOnCanvas(
+                'latest_sensor_data',
+                canvas
+            ).then(sensors => {
+                console.log(`绘制了 ${sensors.length} 个传感器`);
+            });
+
+            // 定时更新
+            setInterval(() => {
+                drawSensorsOnCanvas(
+                    'latest_sensor_data',
+                    canvas
+                );
+            }, 10000); // 每10秒更新一次
+        }
     </script>
 </body>
 

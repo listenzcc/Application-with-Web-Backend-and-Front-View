@@ -4,12 +4,15 @@ from datetime import datetime, timedelta
 import asyncio
 
 from .sensor_reader import SensorDataReader
+from .sensor_writer import SensorDataWriter
 
 
 class SensorsUI:
-    def __init__(self, data_reader):
+    def __init__(self, data_reader: SensorDataReader, writer: SensorDataWriter, rights: dict = {}):
         self.auto_refresh = True
         self.reader = data_reader
+        self.writer = writer
+        self.rights = rights
         self.current_page = 1
         self.page_size = 10
         self.selected_sensor = None
@@ -24,8 +27,9 @@ class SensorsUI:
             with ui.row().classes('items-center'):
                 ui.button('刷新数据', icon='refresh',
                           on_click=self.refresh_data).classes('bg-green-500')
-                ui.button('添加传感器', icon='add', on_click=self.show_add_sensor_dialog).classes(
-                    'bg-blue-500')
+                if self.rights.get('create_content', False):
+                    ui.button('添加传感器', icon='add', on_click=self.show_add_sensor_dialog).classes(
+                        'bg-blue-500')
 
         # 主内容区域
         with ui.row().classes('w-full p-4'):
@@ -118,12 +122,13 @@ class SensorsUI:
                             '最后更新: -').classes('text-sm text-gray-500')
 
                         with ui.row().classes('w-full justify-end mt-2'):
-                            ui.button('查看历史', icon='history',
-                                      on_click=self.show_history).props('flat')
-                            ui.button('编辑', icon='edit', on_click=self.show_edit_dialog).props(
-                                'flat')
-                            ui.button('删除', icon='delete', color='red',
-                                      on_click=self.show_delete_dialog).props('flat')
+                            # ui.button('查看历史', icon='history', on_click=self.show_history).props('flat')
+                            if self.rights.get('edit_content', False):
+                                ui.button('编辑', icon='edit', on_click=self.show_edit_dialog).props(
+                                    'flat')
+                            if self.rights.get('delete_content',  False):
+                                ui.button('删除', icon='delete', color='red',
+                                          on_click=self.show_delete_dialog).props('flat')
 
                 # 实时图表
                 with ui.card().classes('w-1/2'):
@@ -149,7 +154,6 @@ class SensorsUI:
 
         # 启动自动刷新
         self.auto_refresh_task = asyncio.create_task(self.auto_refresh_loop())
-        print(self.auto_refresh_task)
 
     async def load_sensor_data(self):
         """加载传感器数据"""
@@ -245,7 +249,9 @@ class SensorsUI:
             # 应用搜索筛选
             search_text = self.search_input.value.lower() if self.search_input.value else ''
             if search_text:
-                rows = [r for r in rows if search_text in r['sensor_id'].lower()]
+                # rows = [r for r in rows if search_text in r['sensor_id'].lower()]
+                rows = [
+                    r for r in rows if r['sensor_id'].lower().startswith(search_text)]
 
             # 格式化数据
             formatted_rows = self.format_table_rows(rows)
@@ -333,11 +339,20 @@ class SensorsUI:
                     for data_point in sensor_data:
                         # 时间数据（转换为合适格式）
                         timestamp = data_point.get('timestamp', '')
-                        # 如果是datetime对象，转换为字符串
-                        if hasattr(timestamp, 'strftime'):
-                            time_str = timestamp.strftime('%H:%M:%S')
-                        else:
-                            time_str = str(timestamp)
+                        # # 如果是datetime对象，转换为字符串
+                        # if hasattr(timestamp, 'strftime'):
+                        #     time_str = timestamp.strftime('%H:%M:%S')
+                        # else:
+                        # 假设timestamp是ISO格式字符串，如 '2024-01-15T10:30:00'
+                        timestamp_dt = datetime.fromisoformat(
+                            timestamp)
+
+                        # 计算与当前时间的差值
+                        current_time = datetime.now()
+                        time_difference = current_time - timestamp_dt
+                        seconds_int = int(time_difference.total_seconds())
+                        time_str = str(seconds_int)
+                        # time_str = str(timestamp)
 
                         times.append(time_str)
                         values.append(data_point.get('value', 0))
@@ -353,9 +368,9 @@ class SensorsUI:
         except Exception as e:
             ui.notify(f'更新详情失败: {str(e)}', type='negative')
 
-    def filter_sensors(self):
+    async def filter_sensors(self):
         """过滤传感器"""
-        self.refresh_data()
+        await self.refresh_data()
 
     def change_page(self, page):
         """切换页面"""
@@ -365,7 +380,6 @@ class SensorsUI:
 
     async def auto_refresh_loop(self):
         """自动刷新循环"""
-        print('auto refresh started')
         while True:
             await asyncio.sleep(self.refresh_interval)
             if hasattr(self, 'auto_refresh') and self.auto_refresh:
@@ -392,16 +406,38 @@ class SensorsUI:
 
         dialog.open()
 
-    async def add_sensor(self, sensor_id, x, y, dialog):
+    def show_edit_sensor_dialog(self, sensor_id: str):
+        """显示编辑传感器对话框"""
+        with ui.dialog() as dialog, ui.card().classes('p-6 w-96'):
+            ui.label('添加新传感器').classes('text-xl font-bold mb-4')
+
+            sensor_id = ui.label(f'传感器ID: {sensor_id}').classes('w-full mb-4')
+            x_position = ui.number('X坐标', value=0.0).classes('w-full mb-4')
+            y_position = ui.number('Y坐标', value=0.0).classes('w-full mb-4')
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('取消', on_click=dialog.close)
+                ui.button('提交修改', on_click=lambda: self.add_sensor(
+                    sensor_id.value, x_position.value, y_position.value, dialog, allow_existing=True
+                )).props('color=primary')
+
+        dialog.open()
+
+    async def add_sensor(self, sensor_id, x, y, dialog, allow_existing=False):
         """添加传感器"""
         if not sensor_id:
             ui.notify('请输入传感器ID', type='warning')
             return
 
         try:
+            # Prevent insert existing sensor.
+            if not allow_existing:
+                sensors = self.reader.get_sensor_info()
+                for s in sensors:
+                    assert s['sensor_id'] != sensor_id, f'Sensor({sensor_id}) exists.'
             # 这里需要调用写入器添加传感器
-            # writer.register_sensor(sensor_id, x, y)
-            ui.notify(f'传感器 {sensor_id} 添加成功', type='positive')
+            self.writer.register_sensor(sensor_id, x, y)
+            ui.notify(f'传感器 {sensor_id} 操作成功', type='positive')
             dialog.close()
             await self.refresh_data()
         except Exception as e:
@@ -415,10 +451,46 @@ class SensorsUI:
 
     def show_edit_dialog(self):
         """显示编辑对话框"""
-        if self.selected_sensor:
-            ui.notify(f'编辑 {self.selected_sensor}', type='info')
+        if not self.selected_sensor:
+            return
 
-    def show_delete_dialog(self):
+        sensor_id = self.selected_sensor
+        sensors = self.reader.get_sensor_info()
+        x = None
+        y = None
+        for s in sensors:
+            if s['sensor_id'] == sensor_id:
+                x = s['x_position']
+                y = s['y_position']
+                break
+        if x is None or y is None:
+            return
+
+        with ui.dialog() as dialog, ui.card().classes('p-6 w-96'):
+            ui.label('添加新传感器').classes('text-xl font-bold mb-4')
+
+            # Setup existing value
+            sensor_id_label = ui.label(
+                f'传感器ID: {sensor_id}').classes('w-full mb-4')
+            x_position = ui.number('X坐标', value=x).classes('w-full mb-4')
+            y_position = ui.number('Y坐标', value=y).classes('w-full mb-4')
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('取消', on_click=dialog.close)
+                ui.button('提交修改', on_click=lambda: self.add_sensor(
+                    sensor_id, x_position.value, y_position.value, dialog, allow_existing=True
+                )).props('color=primary')
+
+        dialog.open()
+        return
+
+    async def show_delete_dialog(self):
         """显示删除对话框"""
-        if self.selected_sensor:
+        if not self.selected_sensor:
+            return
+        if self.writer.delete_sensor(self.selected_sensor):
             ui.notify(f'删除 {self.selected_sensor}', type='warning')
+            await self.refresh_data()
+        else:
+            ui.notify(f'删除 {self.selected_sensor}', type='error')
+        return
