@@ -186,19 +186,19 @@
                         color: 'rgba(65, 105, 225, 0.8)',
                         radius: 8,
                         borderColor: 'rgba(30, 144, 255, 1)',
-                        labelColor: 'white'
+                        labelColor: 'black'
                     },
                     temp: {
                         color: 'rgba(220, 20, 60, 0.8)',
                         radius: 10,
                         borderColor: 'rgba(255, 69, 0, 1)',
-                        labelColor: 'white'
+                        labelColor: 'black'
                     },
                     default: {
                         color: 'rgba(50, 205, 50, 0.8)',
                         radius: 8,
                         borderColor: 'rgba(34, 139, 34, 1)',
-                        labelColor: 'white'
+                        labelColor: 'black'
                     },
                     fontSize: 12,
                     fontFamily: 'Arial'
@@ -295,6 +295,13 @@
                 ctx.font = `10px ${fontFamily}`;
                 ctx.fillText(timeText, x, y + style.radius + 25);
             }
+
+            if (sensor.value) {
+                const value = sensor.value.toFixed(4);
+                ctx.font = `10px ${fontFamily}`;
+                ctx.fillText(value, x, y + style.radius + 40);
+
+            }
         }
 
         // 使用示例：
@@ -317,8 +324,10 @@
                 drawSensorsOnCanvas(
                     'latest_sensor_data',
                     canvas
-                );
-            }, 10000); // 每10秒更新一次
+                ).then(sensors => {
+                    console.log(`更新了 ${sensors.length} 个传感器`);
+                });
+            }, 1000); // 每1秒更新一次
         }
     </script>
 </body>

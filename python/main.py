@@ -1029,6 +1029,8 @@ def show_map():
 def require_json_latest_sensor_data():
     reader = SensorDataReader()
     sensors = reader.get_sensor_info()
+    for s in sensors:
+        s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
     obj = json.dumps(sensors)
     return HTMLResponse(obj, media_type='application/json')
 
