@@ -78,7 +78,7 @@ except:
     pass
 
 # Auth middle ware
-unrestricted_page_routes = {'/login', '/welcome'}
+unrestricted_page_routes = {'/login', '/welcome', '/'}
 session_manager = UserSessionManager()
 
 
@@ -923,7 +923,6 @@ async def sensors_page():
 
 abstract = OmegaConf.load('conf/project.yml')['abstract']
 abstract = abstract.replace('\n', '\n\n')
-print(abstract)
 
 
 @ui.page('/')
@@ -936,28 +935,29 @@ async def root():
         # ui.link('Profile page', '/profile')
         # with ui.card().classes('max-w-3xl w-full shadow-lg'):
         #     ui.markdown(abstract)
+        pass
 
-        # 快速导航按钮
-        with ui.row().classes('gap-4 mt-8'):
-            if app.storage.user.get('authenticated', False):
-                ui.button('案例库', icon='dashboard',
-                          on_click=lambda: ui.navigate.to('/caseBrowser')).props('color=primary')
-                ui.button('传感器监控', icon='sensors',
-                          on_click=lambda: ui.navigate.to('/sensors')).props('color=secondary')
-                ui.button('气体数据库', icon='science',
-                          on_click=lambda: ui.navigate.to('/gasExplorer')).props('color=accent')
-            else:
-                ui.button('立即登录', icon='login',
-                          on_click=lambda: ui.navigate.to('/login')).props('color=primary')
-                ui.button('了解更多', icon='info',
-                          on_click=lambda: ui.navigate.to('/welcome')).props('flat')
+    # 快速导航按钮
+    with ui.row().classes('gap-4 mt-8'):
+        if app.storage.user.get('authenticated', False):
+            ui.button('案例库', icon='dashboard',
+                      on_click=lambda: ui.navigate.to('/caseBrowser')).props('color=primary')
+            ui.button('传感器监控', icon='sensors',
+                      on_click=lambda: ui.navigate.to('/sensors')).props('color=secondary')
+            ui.button('气体数据库', icon='science',
+                      on_click=lambda: ui.navigate.to('/gasExplorer')).props('color=accent')
+        else:
+            ui.button('立即登录', icon='login',
+                      on_click=lambda: ui.navigate.to('/login')).props('color=primary')
+            ui.button('了解更多', icon='info',
+                      on_click=lambda: ui.navigate.to('/welcome')).props('flat')
 
-        # 使用markdown并添加卡片样式
-        with ui.card().classes('max-w-3xl w-full shadow-lg bg-white/40'):
-            with ui.card_section().classes('p-8'):
-                ui.markdown(abstract).classes(
-                    'text-gray-700 leading-relaxed'
-                )
+    # 使用markdown并添加卡片样式
+    with ui.card().classes('max-w-3xl w-full shadow-lg bg-white/40'):
+        with ui.card_section().classes('p-8'):
+            ui.markdown(abstract).classes(
+                'text-gray-700 leading-relaxed'
+            )
 
     return
 
@@ -1093,8 +1093,9 @@ async def simulation_page():
 if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
            #    reload=True,
-           reload=True,
-           #    frameless=True,
+           #    reload=True,
+           frameless=True,
+           window_size=(1440, 900),
            uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
            storage_secret='abcdefg')
 

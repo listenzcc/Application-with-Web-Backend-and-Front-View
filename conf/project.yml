@@ -3,7 +3,7 @@ email: xxx@yyy.com
 phone: +86 1234 5678
 location: "#42 St, City, Country"
 abstract: |-
-  ForceProject是一个基于Web的综合权限管理与工业监控平台，采用多层架构设计，
+  ForceProject是一个综合权限管理与工业监控平台，采用多层架构设计，
   集成了用户认证授权、实时传感器数据监控、有毒气体数据库管理、案例文件浏览等多种功能。
 
   核心特性：
