@@ -12,6 +12,9 @@ def with_layout(func: Callable) -> Callable:
     """为页面添加公共header和footer的装饰器"""
     @wraps(func)
     async def wrapper(*args, **kwargs):
+        # ui.add_head_html(f'<title>{project_name}</title>')
+        # ui.add_head_html(
+        #     f'<link rel="icon" href="/static/favicon.ico" type="image/x-icon">')
         # 添加公共header
         create_header()
 

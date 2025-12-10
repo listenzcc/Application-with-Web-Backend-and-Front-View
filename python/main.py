@@ -1,5 +1,4 @@
 # %%
-from omegaconf import OmegaConf
 import json
 import contextlib
 import pandas as pd
@@ -7,6 +6,7 @@ import pandas as pd
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
+from omegaconf import OmegaConf
 
 from nicegui import app, ui
 
@@ -30,10 +30,15 @@ from explorer.toxic_gas import ToxicGasDatabase
 
 from components.layout import with_layout
 
+# %%
+PROJECT = OmegaConf.load('conf/project.yml')
+abstract = PROJECT['abstract']
+abstract = abstract.replace('\n', '\n\n')
 
 # %%
 # Add static directory - This must be done BEFORE any UI elements
 app.add_static_files('/static', 'static')  # URL path, local folder %%
+# 在应用启动时设置全局标题和图标
 
 
 # %%
@@ -921,9 +926,6 @@ async def sensors_page():
     # 创建页面
     await ui_manager.create_sensors_page()
 
-abstract = OmegaConf.load('conf/project.yml')['abstract']
-abstract = abstract.replace('\n', '\n\n')
-
 
 @ui.page('/')
 @with_layout
@@ -1055,8 +1057,17 @@ def serve_pdf(case_name: str):
 
 
 @app.get('/map')
-def show_map():
+def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '10'):
+    # params = dict(request.query_params)
+    print(f'Loading map, {lat=}, {lon=}')
     html_content = Path('static/html/map.html').read_text(encoding='utf-8')
+    changes = {
+        '"{{zoom}}"': zoom,
+        '"{{lat}}"': lat,
+        '"{{lon}}"': lon,
+    }
+    for k, v in changes.items():
+        html_content = html_content.replace(k, v)
     return HTMLResponse(content=html_content)
 
 
@@ -1076,11 +1087,72 @@ def require_json_latest_sensor_data():
 @ui.page('/simulation')
 @with_layout
 async def simulation_page():
+    geo_candidates = {
+        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 10},
+        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 10},
+        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 10},
+        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 10},
+    }
+    default_zoom = 10
+
+    with ui.row():
+        # 创建下拉选择框
+        location_select = ui.select(
+            options=list(geo_candidates.keys()),
+            value='北京',
+            label='选择地点'
+        ).classes('w-40')
+
+        # 创建数字输入框
+        zoom_input = ui.number(
+            value=default_zoom,
+            min=1,
+            max=20,
+            step=1,
+            precision=0
+        ).classes('w-24')
+
+    def update_map():
+        # 获取选择的地点
+        selected_location = location_select.value
+        if selected_location in geo_candidates:
+            geo = geo_candidates[selected_location]
+            zoom = zoom_input.value if zoom_input.value else geo['zoom']
+
+            # 构建包含参数的 URL
+            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}"
+
+            # 更新 iframe 的 src 属性
+            js_code = f"""
+            var iframe = document.getElementById('map-iframe');
+            if (iframe) {{
+                iframe.src = '/map?{params}';
+            }}
+            """
+            ui.run_javascript(js_code)
+
+    # 绑定选择框变化事件
+    # location_select.on_change(update_map)
+    location_select.on('update:model-value', update_map)
+    zoom_input.on_value_change(update_map)
+
+    # def on_click():
+    #     # 通过 id 获取 iframe 元素并修改其 src 属性
+    #     js_code = """
+    #     var iframe = document.getElementById('map-iframe');
+    #     if (iframe) {
+    #         iframe.src = '/map?zoom=5';
+    #     }
+    #     """
+    #     ui.run_javascript(js_code)
+
+    # button = ui.button('Click me.', on_click=on_click)
     with ui.card().classes('w-full h-full p-0 m-0').classes('items-center'):
         # 嵌入iframe来显示地图页面
-        ui.html(f'''
+        iframe = ui.html(f'''
 <div id='mapdiv'>
     <iframe 
+        id="map-iframe"
         src="/map" 
         style="width: 800px; height: 800px; border: none;"
         title="地图"
@@ -1092,10 +1164,11 @@ async def simulation_page():
 
 if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
-           #    reload=True,
-           #    reload=True,
-           frameless=True,
-           window_size=(1440, 900),
+           title=PROJECT.get('name', 'Project'),
+           favicon='./static/favicon/favicon.ico',
+           reload=True,
+           #    frameless=True,
+           #    window_size=(1440, 900),
            uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
            storage_secret='abcdefg')
 

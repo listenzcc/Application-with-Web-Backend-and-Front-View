@@ -35,8 +35,9 @@
             container: 'map',
             style: 'mapbox://styles/mapbox/standard',
             projection: 'globe',
-            zoom: 10,
-            center: [116.3912757, 39.906217] // 纬度，经度
+            zoom: "{{zoom}}",
+            // center: [116.3912757, 39.906217] // 经度，纬度
+            center: ["{{lon}}", "{{lat}}"] // 经度，纬度
         });
 
         map.addControl(new mapboxgl.NavigationControl());
@@ -325,7 +326,7 @@
                     'latest_sensor_data',
                     canvas
                 ).then(sensors => {
-                    console.log(`更新了 ${sensors.length} 个传感器`);
+                    // console.log(`更新了 ${sensors.length} 个传感器`);
                 });
             }, 1000); // 每1秒更新一次
         }
