@@ -1,4 +1,5 @@
 # %%
+from omegaconf import OmegaConf
 import json
 import contextlib
 import pandas as pd
@@ -7,9 +8,7 @@ from typing import Optional
 from pathlib import Path
 from datetime import datetime
 
-from nicegui import Client
 from nicegui import app, ui
-from nicegui.page import page
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse, FileResponse, HTMLResponse
@@ -17,13 +16,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth.models import RoleEnum
 from auth.database import DatabaseManager
-from auth.decorators import AuthContext, require_permission, require_role
+from auth.decorators import AuthContext
 from auth.user_service import UserService
 from auth.auth_manager import PermissionManager
 
+from sensors.ui import SensorsUI
 from sensors.sensor_reader import SensorDataReader
 from sensors.sensor_writer import SensorDataWriter
-from sensors.ui import SensorsUI
 
 from util.user_session_manager import UserSessionManager
 
@@ -31,9 +30,6 @@ from explorer.toxic_gas import ToxicGasDatabase
 
 from components.layout import with_layout
 
-# %%
-# Sensors data
-# sensor_data_reader = SensorDataReader()
 
 # %%
 # Add static directory - This must be done BEFORE any UI elements
@@ -53,7 +49,7 @@ CASE_FOLDER = Path('./data/case')
 
 # Auth db
 # 1. 初始化数据库
-db_manager = DatabaseManager('sqlite:///auth.db', echo=False)
+db_manager = DatabaseManager('sqlite:///db/auth.db', echo=False)
 db_manager.create_tables()
 db_manager.initialize_data()
 
@@ -419,8 +415,8 @@ class GasManagementUI:
                     ui.label('暂无数据').classes('text-h6')
 
         # 底部信息
-        ui.label(f'共 {len(self.current_df) if self.current_df is not None else 0} 条记录').classes(
-            'text-caption')
+        # ui.label(f'共 {len(self.current_df) if self.current_df is not None else 0} 条记录').classes(
+        #     'text-caption')
 
 
 @contextlib.contextmanager
@@ -444,6 +440,17 @@ def user_profile_pil(user, log_in_time):
             ui.icon('badge').classes('text-xl')
             ui.label('Role:').classes('font-bold')
             role_label = ui.label(user.role).classes('text-lg')
+
+        # Permissions
+        with ui.row().classes('items-center gap-2'):
+            ui.icon('star').classes('text-xl')
+            ui.label('Permissions:').classes('font-bold')
+            for perm in PermissionManager.PERMISSIONS:
+                if permission_manager.check_permission(user, perm['name']):
+                    with ui.row():
+                        ui.label(perm['name']).classes(
+                            'font-bold text-gray-600 text-sm').classes('hover:text-blue-500')
+                        ui.tooltip(perm['description'])
 
         # Time passed with icon (will update dynamically)
         with ui.row().classes('items-center gap-2'):
@@ -914,6 +921,10 @@ async def sensors_page():
     # 创建页面
     await ui_manager.create_sensors_page()
 
+abstract = OmegaConf.load('conf/project.yml')['abstract']
+abstract = abstract.replace('\n', '\n\n')
+print(abstract)
+
 
 @ui.page('/')
 @with_layout
@@ -921,8 +932,32 @@ async def root():
     ui.label('Home page')
 
     with make_it_center():
-        ui.link('Welcome page', '/welcome')
-        ui.link('Profile page', '/profile')
+        # ui.link('Welcome page', '/welcome')
+        # ui.link('Profile page', '/profile')
+        # with ui.card().classes('max-w-3xl w-full shadow-lg'):
+        #     ui.markdown(abstract)
+
+        # 快速导航按钮
+        with ui.row().classes('gap-4 mt-8'):
+            if app.storage.user.get('authenticated', False):
+                ui.button('案例库', icon='dashboard',
+                          on_click=lambda: ui.navigate.to('/caseBrowser')).props('color=primary')
+                ui.button('传感器监控', icon='sensors',
+                          on_click=lambda: ui.navigate.to('/sensors')).props('color=secondary')
+                ui.button('气体数据库', icon='science',
+                          on_click=lambda: ui.navigate.to('/gasExplorer')).props('color=accent')
+            else:
+                ui.button('立即登录', icon='login',
+                          on_click=lambda: ui.navigate.to('/login')).props('color=primary')
+                ui.button('了解更多', icon='info',
+                          on_click=lambda: ui.navigate.to('/welcome')).props('flat')
+
+        # 使用markdown并添加卡片样式
+        with ui.card().classes('max-w-3xl w-full shadow-lg bg-white/40'):
+            with ui.card_section().classes('p-8'):
+                ui.markdown(abstract).classes(
+                    'text-gray-700 leading-relaxed'
+                )
 
     return
 
@@ -1021,7 +1056,7 @@ def serve_pdf(case_name: str):
 
 @app.get('/map')
 def show_map():
-    html_content = Path('html/map.html').read_text(encoding='utf-8')
+    html_content = Path('static/html/map.html').read_text(encoding='utf-8')
     return HTMLResponse(content=html_content)
 
 
@@ -1030,7 +1065,10 @@ def require_json_latest_sensor_data():
     reader = SensorDataReader()
     sensors = reader.get_sensor_info()
     for s in sensors:
-        s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+        try:
+            s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+        except:
+            pass
     obj = json.dumps(sensors)
     return HTMLResponse(obj, media_type='application/json')
 
@@ -1058,6 +1096,6 @@ if __name__ in {'__main__', '__mp_main__'}:
            reload=True,
            #    frameless=True,
            uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
-           storage_secret='listenzcc')
+           storage_secret='abcdefg')
 
 # %%

@@ -1,4 +1,4 @@
-# example_usage.py
+# init_auth_db.py
 from auth.database import DatabaseManager
 from auth.user_service import UserService
 from auth.auth_manager import PermissionManager
@@ -9,7 +9,7 @@ from auth.decorators import require_permission, require_role
 
 def main():
     # 1. 初始化数据库
-    db_manager = DatabaseManager('sqlite:///auth.db', echo=False)
+    db_manager = DatabaseManager('sqlite:///db/auth.db', echo=False)
     db_manager.create_tables()
     db_manager.initialize_data()
 

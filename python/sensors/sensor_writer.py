@@ -8,7 +8,7 @@ from .log import logger
 
 
 class SensorDataWriter:
-    def __init__(self, db_path='sensor_data.db'):
+    def __init__(self, db_path='db/sensor_data.db'):
         self.db_path = db_path
         self._init_connection()
 

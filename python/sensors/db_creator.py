@@ -1,12 +1,12 @@
 # db_creator.py
 import sqlite3
 from datetime import datetime
-from log import logger
+from .log import logger
 
 
 def init_database():
     """初始化数据库和表结构"""
-    conn = sqlite3.connect('sensor_data.db')
+    conn = sqlite3.connect('db/sensor_data.db')
     cursor = conn.cursor()
 
     # 创建传感器信息表

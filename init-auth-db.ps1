@@ -1,0 +1,1 @@
+python ./python/init_auth_db.py

@@ -1,2 +1,6 @@
+pandas
+loguru
 nicegui
+openpyxl
+omegaconf
 sqlalchemy

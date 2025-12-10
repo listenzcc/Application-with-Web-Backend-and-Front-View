@@ -1,0 +1,39 @@
+permissions:
+  - name: create_user
+    description: 创建用户
+    roles:
+      - ADMIN
+
+  - name: delete_user
+    description: 删除用户
+    roles:
+      - ADMIN
+
+  - name: view_content
+    description: 查看内容
+    roles:
+      - ADMIN
+      - USER
+      - GUEST
+
+  - name: create_content
+    description: 创建内容
+    roles:
+      - ADMIN
+      - USER
+
+  - name: edit_content
+    description: 编辑内容
+    roles:
+      - ADMIN
+
+  - name: delete_content
+    description: 删除内容
+    roles:
+      - ADMIN
+
+  - name: computation
+    description: 开始科学模拟
+    roles:
+      - ADMIN
+      - USER

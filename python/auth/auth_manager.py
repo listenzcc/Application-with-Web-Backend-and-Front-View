@@ -1,43 +1,51 @@
 # auth_manager.py
 import re
+from omegaconf import OmegaConf
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from .models import User, Permission, RoleEnum, Base
+
+PERMISSIONS = OmegaConf.load('./conf/permission.yml')['permissions']
 
 
 class PermissionManager:
     """权限管理器"""
 
-    # 预定义权限
-    PERMISSIONS = {
-        # 基本权限
-        'view_profile': '查看个人资料',
-        'edit_profile': '编辑个人资料',
+    PERMISSIONS = PERMISSIONS
 
-        # 用户权限
-        'view_users': '查看用户列表',
-        'create_user': '创建用户',
-        'edit_user': '编辑用户',
-        'delete_user': '删除用户',
+    # # 预定义权限
+    # PERMISSIONS_old = {
+    #     # 基本权限
+    #     'view_profile': '查看个人资料',
+    #     'edit_profile': '编辑个人资料',
 
-        # 内容权限
-        'view_content': '查看内容',
-        'create_content': '创建内容',
-        'edit_content': '编辑内容',
-        'delete_content': '删除内容',
+    #     # 用户权限
+    #     'view_users': '查看用户列表',
+    #     'create_user': '创建用户',
+    #     'edit_user': '编辑用户',
+    #     'delete_user': '删除用户',
 
-        # 管理权限
-        'manage_permissions': '管理权限',
-        'view_logs': '查看日志',
-        'manage_system': '管理系统设置',
-        'manage_sessions': '管理登陆会话'
-    }
+    #     # 内容权限
+    #     'view_content': '查看内容',
+    #     'create_content': '创建内容',
+    #     'edit_content': '编辑内容',
+    #     'delete_content': '删除内容',
+
+    #     # 管理权限
+    #     'manage_permissions': '管理权限',
+    #     'view_logs': '查看日志',
+    #     'manage_system': '管理系统设置',
+    #     'manage_sessions': '管理登陆会话'
+    # }
 
     # 角色默认权限
     ROLE_PERMISSIONS = {
-        RoleEnum.GUEST.value: ['view_profile', 'view_content'],
-        RoleEnum.USER.value: ['view_profile', 'edit_profile', 'view_content', 'create_content', 'edit_content'],
-        RoleEnum.ADMIN.value: list(PERMISSIONS.keys())  # 管理员拥有所有权限
+        # RoleEnum.GUEST.value: ['view_profile', 'view_content'],
+        # RoleEnum.USER.value: ['view_profile', 'edit_profile', 'view_content', 'create_content', 'edit_content'],
+        # RoleEnum.ADMIN.value: list(PERMISSIONS.keys())  # 管理员拥有所有权限
+        RoleEnum.GUEST.value: [e['name'] for e in PERMISSIONS if 'GUEST' in e['roles']],
+        RoleEnum.USER.value: [e['name'] for e in PERMISSIONS if 'USER' in e['roles']],
+        RoleEnum.ADMIN.value: [e['name'] for e in PERMISSIONS if 'ADMIN' in e['roles']],
     }
 
     def __init__(self, session: Session):
@@ -45,7 +53,10 @@ class PermissionManager:
 
     def initialize_permissions(self):
         """初始化权限到数据库"""
-        for perm_name, description in self.PERMISSIONS.items():
+        # for perm_name, description in self.PERMISSIONS.items():
+        for perm in self.PERMISSIONS:
+            perm_name = perm['name']
+            description = perm['description']
             if not self.session.query(Permission).filter_by(name=perm_name).first():
                 permission = Permission(
                     name=perm_name, description=description)

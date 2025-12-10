@@ -6,7 +6,7 @@ import pandas as pd
 
 
 class SensorDataReader:
-    def __init__(self, db_path='sensor_data.db'):
+    def __init__(self, db_path='db/sensor_data.db'):
         self.db_path = db_path
 
     def get_recent_data(self, sensor_id: Optional[str] = None,

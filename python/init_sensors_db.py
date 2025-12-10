@@ -1,10 +1,10 @@
 # startup.py
 import time
 from datetime import datetime
-from db_creator import init_database
-from sensor_writer import SensorDataWriter
-from sensor_reader import SensorDataReader
-from log import logger
+from sensors.db_creator import init_database
+from sensors.sensor_writer import SensorDataWriter
+from sensors.sensor_reader import SensorDataReader
+from sensors.log import logger
 
 
 def main():

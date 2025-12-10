@@ -1,6 +1,11 @@
 from functools import wraps
 from typing import Callable, Optional
 from nicegui import app, ui
+from omegaconf import OmegaConf
+
+conf = OmegaConf.load('./conf/project.yml')
+project_name = conf['name']
+email = conf['email']
 
 
 def with_layout(func: Callable) -> Callable:
@@ -42,7 +47,7 @@ def create_header():
             with ui.row().classes('items-center gap-8'):
                 # Logo
                 ui.link(
-                    'MyApp', '/').classes('text-2xl font-bold text-blue-600 no-underline hover:text-blue-800')
+                    project_name, '/').classes('text-2xl font-bold text-blue-600 no-underline hover:text-blue-800')
 
                 # 主导航
                 with ui.row().classes('gap-6'):
@@ -138,7 +143,7 @@ def create_footer():
             with ui.grid(columns=3).classes('w-full gap-8'):
                 # 公司信息
                 with ui.column():
-                    ui.label('MyApp').classes(
+                    ui.label(project_name).classes(
                         'text-xl font-bold text-gray-800 mb-2')
                     ui.label('Relax and take a very deep breathe.').classes(
                         'text-gray-600')
@@ -176,20 +181,20 @@ def create_footer():
                         'font-bold text-gray-700 mb-3')
                     with ui.row().classes('items-center gap-2 text-gray-600'):
                         ui.icon('email', size='sm')
-                        ui.label('contact@myapp.com')
+                        ui.label(conf['email'])
                     with ui.row().classes('items-center gap-2 text-gray-600'):
                         ui.icon('phone', size='sm')
-                        ui.label('+1 (555) 123-4567')
+                        ui.label(conf['phone'])
                     with ui.row().classes('items-center gap-2 text-gray-600'):
                         ui.icon('location_on', size='sm')
-                        ui.label('123 Main St, City, Country')
+                        ui.label(conf['location'])
 
             # 分隔线
             ui.separator()
 
             # Footer下半部分：版权信息
             with ui.row().classes('w-full justify-between items-center'):
-                ui.label('© 2024 MyApp. All rights reserved.').classes(
+                ui.label(f'© 2024 {project_name}. All rights reserved.').classes(
                     'text-sm text-gray-500')
                 with ui.row().classes('gap-6 text-sm'):
                     ui.link('Privacy Policy', '/privacy').classes(

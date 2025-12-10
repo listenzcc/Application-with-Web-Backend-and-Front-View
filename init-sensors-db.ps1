@@ -1,0 +1,1 @@
+python ./python/init_sensors_db.py

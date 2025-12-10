@@ -1,0 +1,1 @@
+python ./python/init_gas_db.py
