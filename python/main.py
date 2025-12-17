@@ -1163,13 +1163,26 @@ async def simulation_page():
 
 
 if __name__ in {'__main__', '__mp_main__'}:
+    import sys
+
+    kwargs = {
+        'reload': True,
+    }
+    if len(sys.argv) > 1 and sys.argv[1] == '-w':
+        kwargs = {
+            'reload': False,
+            'frameless': True,
+            'window_size': (1440, 900),
+        }
+
     ui.run(root,
            title=PROJECT.get('name', 'Project'),
            favicon='./static/favicon/favicon.ico',
-           reload=True,
+           #    reload=True,
            #    frameless=True,
            #    window_size=(1440, 900),
            uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
-           storage_secret='abcdefg')
+           storage_secret='abcdefg',
+           **kwargs)
 
 # %%
