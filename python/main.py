@@ -198,6 +198,9 @@ class GasManagementUI:
                 melting_pt = ui.number('熔点(℃)', value=0.0).classes('w-full')
                 idlh = ui.input('IDLH浓度').classes('w-full')
                 mac = ui.input('MAC浓度').classes('w-full')
+                threshold1 = ui.input('安全阈值').classes('w-full')
+                threshold2 = ui.input('警戒浓度').classes('w-full')
+                threshold3 = ui.input('危险浓度').classes('w-full')
 
             with ui.row():
                 ui.button('取消', on_click=dialog.close)
@@ -211,7 +214,10 @@ class GasManagementUI:
                         '沸点_C': boiling_pt.value,
                         '熔点_C': melting_pt.value,
                         'IDLH浓度': idlh.value,
-                        'MAC浓度': mac.value
+                        'MAC浓度': mac.value,
+                        '安全阈值': threshold1.value,
+                        '警戒浓度': threshold2.value,
+                        '危险浓度': threshold3.value,
                     },
                     dialog
                 ))
@@ -255,7 +261,8 @@ class GasManagementUI:
             display_df = self.current_df.copy()
             columns_to_show = [
                 '气体名称', '分子式', 'CAS号', '分子量', '毒性等级',
-                '沸点_C', '熔点_C', 'IDLH浓度', 'MAC浓度'
+                '沸点_C', '熔点_C', 'IDLH浓度', 'MAC浓度',
+                '安全阈值', '警戒浓度', '危险浓度'
             ]
 
             # 确保列存在
@@ -264,10 +271,10 @@ class GasManagementUI:
             display_df = display_df[available_columns]
 
             # 重命名列显示
-            display_df = display_df.rename(columns={
-                '沸点_C': '沸点(℃)',
-                '熔点_C': '熔点(℃)'
-            })
+            # display_df = display_df.rename(columns={
+            #     '沸点_C': '沸点(℃)',
+            #     '熔点_C': '熔点(℃)'
+            # })
 
             # 更新表格
             self.table.update_rows(display_df.to_dict('records'))
@@ -388,6 +395,12 @@ class GasManagementUI:
                             'field': 'IDLH浓度', 'sortable': True},
                         {'name': 'MAC浓度', 'label': 'MAC浓度',
                             'field': 'MAC浓度', 'sortable': True},
+                        {'name': '安全阈值', 'label': '安全阈值',
+                            'field': '安全阈值', 'sortable': True},
+                        {'name': '警戒浓度', 'label': '警戒浓度',
+                            'field': '警戒浓度', 'sortable': True},
+                        {'name': '危险浓度', 'label': '危险浓度',
+                            'field': '危险浓度', 'sortable': True},
                         {'name': 'actions', 'label': '操作', 'field': 'actions'}
                     ]
 
@@ -1178,9 +1191,6 @@ if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
            title=PROJECT.get('name', 'Project'),
            favicon='./static/favicon/favicon.ico',
-           #    reload=True,
-           #    frameless=True,
-           #    window_size=(1440, 900),
            uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
            storage_secret='abcdefg',
            **kwargs)

@@ -35,6 +35,9 @@ class ToxicGasDatabase:
             熔点_C REAL NOT NULL,
             IDLH浓度 TEXT NOT NULL,
             MAC浓度 TEXT NOT NULL,
+            安全阈值 TEXT NOT NULL,
+            警戒浓度 TEXT NOT NULL,
+            危险浓度 TEXT NOT NULL,
             created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -74,7 +77,10 @@ class ToxicGasDatabase:
                 'IDLH 浓度': 'IDLH浓度',
                 'IDLH浓度': 'IDLH浓度',
                 'MAC 浓度': 'MAC浓度',
-                'MAC浓度': 'MAC浓度'
+                'MAC浓度': 'MAC浓度',
+                '安全阈值': '安全阈值',
+                '警戒浓度': '警戒浓度',
+                '危险浓度': '危险浓度'
             }
 
             # 重命名列
@@ -91,7 +97,10 @@ class ToxicGasDatabase:
                     '沸点_C': float(row['沸点_C']),
                     '熔点_C': float(row['熔点_C']),
                     'IDLH浓度': str(row['IDLH浓度']),
-                    'MAC浓度': str(row['MAC浓度'])
+                    'MAC浓度': str(row['MAC浓度']),
+                    '安全阈值': str(row['安全阈值']),
+                    '警戒浓度': str(row['警戒浓度']),
+                    '危险浓度': str(row['危险浓度'])
                 })
             logger.debug(f"成功从 {excel_path} 导入 {len(df)} 条数据")
         except Exception as e:
@@ -106,8 +115,8 @@ class ToxicGasDatabase:
         try:
             sql = '''
             INSERT INTO toxic_gases 
-            (气体名称, 分子式, CAS号, 分子量, 毒性等级, 沸点_C, 熔点_C, IDLH浓度, MAC浓度)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (气体名称, 分子式, CAS号, 分子量, 毒性等级, 沸点_C, 熔点_C, IDLH浓度, MAC浓度, 安全阈值, 警戒浓度, 危险浓度)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
             values = (
                 gas_data['气体名称'],
@@ -118,7 +127,10 @@ class ToxicGasDatabase:
                 gas_data['沸点_C'],
                 gas_data['熔点_C'],
                 gas_data['IDLH浓度'],
-                gas_data['MAC浓度']
+                gas_data['MAC浓度'],
+                gas_data['安全阈值'],
+                gas_data['警戒浓度'],
+                gas_data['危险浓度']
             )
             self.cursor.execute(sql, values)
             self.conn.commit()
