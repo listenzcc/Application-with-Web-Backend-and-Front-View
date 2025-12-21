@@ -19,7 +19,7 @@ def with_layout(func: Callable) -> Callable:
         create_header()
 
         # 页面主要内容区域
-        with ui.column().classes('w-full max-w-6xl mx-auto p-4 min-h-[calc(100vh-130px)]'):
+        with ui.column().classes('w-full max-w-7xl mx-auto p-4 min-h-[calc(100vh-130px)]'):
             await func(*args, **kwargs)
 
         # 添加公共footer
@@ -54,17 +54,19 @@ def create_header():
 
                 # 主导航
                 with ui.row().classes('gap-6'):
-                    ui.link('Home', '/',
+                    ui.link('介绍页', '/',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Simulation', '/simulation',
+                    ui.link('扩散仿真', '/simulation',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('CaseBrowser', '/caseBrowser',
+                    ui.link('仿真案例', '/caseBrowser',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('GasExplorer', '/gasExplorer',
+                    ui.link('气体管理', '/gasExplorer',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Privilege', '/privilege',
+                    ui.link('权限管理', '/privilege',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('Sensors', '/sensors',
+                    ui.link('传感器管理', '/sensors',
+                            ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
+                    ui.link('事故教育', '/accidents',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
 
             # 右侧：用户信息和操作（右上角）

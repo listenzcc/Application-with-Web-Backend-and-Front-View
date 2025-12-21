@@ -50,6 +50,12 @@ gas_db = ToxicGasDatabase()
 CASE_FOLDER = Path('./data/case')
 
 # %%
+# Accidents education
+accidents_education_df = pd.read_excel('./data/accidents/a-20251221.xlsx')
+accidents_education_df['案例场景分类'] = accidents_education_df['案例场景分类'].ffill()
+
+
+# %%
 # Auth system
 
 # Auth db
@@ -288,7 +294,8 @@ class GasManagementUI:
         if stats:
             stats_text = f"""
             气体总数: {stats.get('total_gases', 0)}
-            毒性分布: {', '.join([f'{k}:{v}' for k, v in stats.get('toxicity_distribution', {}).items()])}
+            毒性分布: {', '.join([f'{k}:{v}' for k, v in stats.get(
+                'toxicity_distribution', {}).items()])}
             平均分子量: {stats.get('avg_molecular_weight', 0):.2f}
             沸点范围: {stats.get('boiling_point_range', 'N/A')}
             """
@@ -315,7 +322,7 @@ class GasManagementUI:
     def create_ui(self):
         """创建UI界面"""
         # 标题
-        ui.label('Gas Explorer').classes('text-h4 text-primary')
+        ui.label('气体管理').classes('text-h4 text-primary')
 
         # 搜索和过滤区域
         with ui.row().classes('items-center gap-4 w-full'):
@@ -415,13 +422,13 @@ class GasManagementUI:
                         rows=rows,
                         pagination={'rowsPerPage': 10},
                         # on_sort=self.on_sort
-                    ).classes('w-full')
+                    ).classes('max-w-6xl overflow-x-auto')
 
                     if _allow_delete:
                         # 为每行添加删除按钮
                         self.table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
-                                <q-btn @click="() => $parent.$emit('delete', props.row.分子式)" 
+                                <q-btn @click="() => $parent.$emit('delete', props.row.分子式)"
                                     icon="delete" size="sm" color="negative" flat dense />
                             </q-td>
                         ''')
@@ -543,7 +550,7 @@ def _delete_user_popup(name, updater, on_submit):
 
     with ui.dialog() as dialog, ui.card():
         ui.icon('warning', color='orange', size='lg')
-        ui.label(f'Confirm User Deletion ({u.username})').classes(
+        ui.label(f'确认删除用户 ({u.username})').classes(
             'text-xl font-semibold text-gray-800')
         with ui.row():
             ui.button(
@@ -561,7 +568,7 @@ def _delete_user_popup(name, updater, on_submit):
 @ui.page('/privilege')
 @with_layout
 async def privilege_page():
-    ui.label('Privilege page')
+    ui.label('用户信息').classes('text-h5 font-bold mt-4 mb-2')
 
     this_user = user_service.get_user_by_id(app.storage.user['id'])
     log_in_time = app.storage.user['logInTime']
@@ -572,18 +579,18 @@ async def privilege_page():
 
     # View users, view_users
     if permission_manager.check_permission(this_user, 'view_users'):
-        with ui.expansion('View users', icon='work').classes('w-full'):
+        with ui.expansion('查看用户信息', icon='work').classes('w-full'):
             view_users_card = ui.card()
 
             columns = [
-                {'name': 'name', 'label': 'Name', 'field': 'name',
+                {'name': 'name', 'label': '用户名', 'field': 'name',
                     'required': True, 'align': 'left', 'sortable': True},
-                {'name': 'role', 'label': 'Role',
+                {'name': 'role', 'label': '角色',
                     'field': 'role', 'sortable': True},
-                {'name': 'isActive', 'label': 'isActive',
+                {'name': 'isActive', 'label': '是否激活',
                     'field': 'isActive', 'sortable': True},
-                {'name': 'action', 'label': 'Action', 'align': 'center'},
-                {'name': 'delete', 'label': 'Delete', 'align': 'center'}
+                {'name': 'action', 'label': '编辑', 'align': 'center'},
+                {'name': 'delete', 'label': '删除', 'align': 'center'}
             ]
 
             def update_view_users_card():
@@ -622,12 +629,12 @@ async def privilege_page():
                         e.args['name'], this_user, update_view_users_card))
             update_view_users_card()
 
-            ui.button('Refresh', on_click=update_view_users_card)
+            ui.button('刷新用户信息', on_click=update_view_users_card)
         pass
 
     # Signup, create_user
     if permission_manager.check_permission(this_user, 'create_user'):
-        with ui.expansion('Create New User', icon='settings').classes('w-full'):
+        with ui.expansion('创建新用户', icon='settings').classes('w-full'):
             def try_signup():
                 if user_service.create_user(
                     username=username.value,
@@ -635,23 +642,23 @@ async def privilege_page():
                     password=password.value,
                     role=role.value
                 ):
-                    ui.notify('Signup successfully.')
+                    ui.notify('成功创建新用户')
                 else:
-                    ui.notify('Signup failed.', color='negative')
+                    ui.notify('创建用户失败', color='negative')
                 try:
                     update_view_users_card()
                 except:
                     pass
 
             with ui.card():
-                ui.label('SignUp')
-                username = ui.input('Username').on('keydown.enter', try_signup)
-                password = ui.input('Password', password=True, password_toggle_button=True).on(
+                ui.label('注册新用户').classes('text-h6')
+                username = ui.input('用户名').on('keydown.enter', try_signup)
+                password = ui.input('密码', password=True, password_toggle_button=True).on(
                     'keydown.enter', try_signup)
                 role = ui.select(['user', 'guest'],
-                                 label='role', value='guest')
-                email = ui.input('Email').on('keydown.enter', try_signup)
-                ui.button('SignUp', on_click=try_signup)
+                                 label='角色', value='guest')
+                email = ui.input('电子邮箱地址').on('keydown.enter', try_signup)
+                ui.button('注册新用户', on_click=try_signup)
 
     return
 
@@ -659,8 +666,6 @@ async def privilege_page():
 @ui.page('/gasExplorer')
 @with_layout
 async def gas_explorer_page():
-    ui.label('Gas explorer page')
-
     with ui.card().classes('w-full shadow-lg rounded-lg').style('background:#fafafaa0'):
         # ui.label('Gas explorer').classes('text-h4 font-bold text-primary')
 
@@ -671,7 +676,7 @@ async def gas_explorer_page():
 
         # 网站链接部分
         with ui.card_section():
-            ui.label('Friend websites:').classes('text-h6 font-semibold mb-3')
+            ui.label('气体知识学习材料').classes('text-h6 font-semibold mb-3')
 
             websites = {
                 'Gazfinder': 'https://en.gazfinder.com/',
@@ -688,12 +693,291 @@ async def gas_explorer_page():
     return
 
 
+@ui.page('/accidents')
+@with_layout
+async def accidents_page():
+    # 标题区域
+    with ui.row().classes('items-center mb-6'):
+        ui.icon('warning').classes('text-red-600 text-2xl mr-2')
+        ui.label('事故教育').classes('text-h4 font-bold')
+
+    # 数据统计卡片
+    with ui.row().classes('w-full mb-6 gap-4'):
+        with ui.card().classes('flex-1 p-4'):
+            with ui.row().classes('items-center'):
+                ui.icon('folder_open').classes('text-blue-600 text-2xl mb-2')
+                ui.label('总案例数量').classes(
+                    'text-lg font-semibold text-gray-600')
+                ui.label(str(len(accidents_education_df))).classes(
+                    'text-3xl font-bold text-blue-700')
+
+        with ui.card().classes('flex-1 p-4'):
+            with ui.row().classes('items-center'):
+                ui.icon('category').classes('text-green-600 text-2xl mb-2')
+                # 统计不同的案例场景分类
+                categories = accidents_education_df['案例场景分类'].nunique()
+                ui.label('场景分类').classes('text-lg font-semibold text-gray-600')
+                ui.label(str(categories)).classes(
+                    'text-3xl font-bold text-green-700')
+
+        with ui.card().classes('flex-1 p-4'):
+            with ui.row().classes('items-center'):
+                ui.icon('dangerous').classes('text-red-600 text-2xl mb-2')
+                # 统计死亡人数（近似统计）
+                ui.label('涉及泄漏气体').classes(
+                    'text-lg font-semibold text-gray-600')
+                gases = accidents_education_df['泄漏气体'].nunique()
+                ui.label(str(gases)).classes('text-3xl font-bold text-red-700')
+
+    # 分类选择器 & 搜索框
+    with ui.row().classes('w-full items-center mb-4'):
+        # 分类选择器
+        ui.label('筛选案例类型:').classes('mr-2 font-medium')
+
+        # 获取所有案例场景分类
+        categories = [
+            '所有案例'] + sorted(accidents_education_df['案例场景分类'].dropna().unique().tolist())
+
+        category_select = ui.select(
+            options=categories,
+            value='所有案例',
+            on_change=lambda e: filter_accidents(e.value)
+        ).classes('w-64')
+
+        # 搜索框
+        ui.label('搜索:').classes('mr-2 font-medium')
+        search_input = ui.input(
+            placeholder='输入关键词搜索案例名称、泄漏气体等...',
+            on_change=lambda e: filter_accidents(category_select.value)
+        ).classes('flex-grow')
+
+    # # 数据表格容器
+    # table_container = ui.column().classes('w-full')
+    # 数据表格容器 - 设置为可滚动
+    table_container = ui.column().classes(
+        'w-full h-[400px] overflow-y-auto border rounded')
+
+    # 当前显示的数据
+    current_df = accidents_education_df.copy()
+
+    def filter_accidents(category: str, search_text: str = ''):
+        """筛选事故案例"""
+        nonlocal current_df
+
+        # 清空容器
+        table_container.clear()
+
+        # 获取搜索文本
+        search_text = search_input.value.lower() if search_input.value else ''
+
+        # 筛选数据
+        filtered_df = accidents_education_df.copy()
+
+        # 按分类筛选
+        if category != '所有案例':
+            filtered_df = filtered_df[filtered_df['案例场景分类'] == category]
+
+        # 按搜索词筛选
+        if search_text:
+            search_fields = ['案例名称', '泄漏气体', '泄漏设备（位置）', '事故经过概要']
+            mask = False
+            for field in search_fields:
+                if field in filtered_df.columns:
+                    mask = mask | filtered_df[field].astype(
+                        str).str.lower().str.contains(search_text)
+            filtered_df = filtered_df[mask]
+
+        current_df = filtered_df
+        update_table()
+
+    def update_table():
+        """更新表格显示"""
+        table_container.clear()
+
+        if current_df.empty:
+            with table_container:
+                ui.label('未找到相关案例').classes('text-center text-gray-500 py-8')
+            return
+
+        with table_container:
+            # 创建表格
+            columns = [
+                '案例编号', '案例场景分类', '案例名称', '泄漏气体',
+                '泄漏设备（位置）', '事故经过概要', '造成损失及危害'
+            ]
+
+            # 确保列存在
+            available_columns = [
+                col for col in columns if col in current_df.columns]
+
+            # 创建数据表格
+            table = ui.table(
+                columns=[{'name': col, 'label': col, 'field': col}
+                         for col in available_columns],
+                rows=current_df[available_columns].to_dict('records'),
+                pagination=10,
+                row_key='案例编号'
+            ).classes('w-full')
+
+            table.props('grid')
+            table.classes('max-h-96')
+
+            # 添加详情查看功能
+            table.add_slot('body', '''
+                <q-tr :props="props">
+                    <q-td v-for="col in props.cols" :key="col.name" :props="props">
+                        <div v-if="col.name === '案例名称'" class="cursor-pointer text-blue-600 hover:text-blue-800"
+                             @click="() => $parent.$emit('view-details', props.row)">
+                            <q-icon name="visibility" size="sm" class="mr-1"/>
+                            {{ col.value }}
+                        </div>
+                        <div v-else-if="col.name === '泄漏气体'" class="flex items-center">
+                            <q-icon name="whatshot" size="sm" class="mr-1 text-red-500"/>
+                            {{ col.value }}
+                        </div>
+                        <div v-else-if="col.name === '案例场景分类'" class="flex items-center">
+                            <q-icon name="category" size="sm" class="mr-1 text-green-500"/>
+                            {{ col.value }}
+                        </div>
+                        <div v-else>
+                            {{ col.value }}
+                        </div>
+                    </q-td>
+                </q-tr>
+            ''')
+
+            def on_row_click(row):
+                """查看案例详情"""
+                show_accident_details(row)
+
+            table.on('view-details', on_row_click)
+
+    def show_accident_details(row):
+        """显示事故详情对话框"""
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-3xl'):
+            # 标题
+            with ui.row().classes('items-center mb-4'):
+                ui.icon('warning').classes('text-red-600 text-xl mr-2')
+                ui.label(f'案例详情: {row.get("案例名称", "未知")}').classes(
+                    'text-h5 font-bold')
+
+            # 创建详情布局
+            with ui.column().classes('w-full gap-3'):
+                # 基本信息卡片
+                with ui.card().classes('w-full p-4 bg-blue-50'):
+                    ui.label('基本信息').classes(
+                        'text-lg font-bold text-blue-700 mb-2')
+                    with ui.grid(columns=2).classes('gap-2'):
+                        with ui.column():
+                            ui.label('案例编号:').classes('font-medium')
+                            ui.label(row.get('案例编号', 'N/A')
+                                     ).classes('text-blue-600')
+
+                            ui.label('案例分类:').classes('font-medium mt-2')
+                            ui.label(row.get('案例场景分类', 'N/A')
+                                     ).classes('text-green-600')
+
+                        with ui.column():
+                            ui.label('泄漏气体:').classes('font-medium')
+                            with ui.row().classes('items-center'):
+                                ui.icon('whatshot').classes(
+                                    'text-red-500 mr-1')
+                                ui.label(row.get('泄漏气体', 'N/A')
+                                         ).classes('text-red-600')
+
+                # 设备信息卡片
+                with ui.card().classes('w-full p-4 bg-green-50'):
+                    ui.label('设备与位置').classes(
+                        'text-lg font-bold text-green-700 mb-2')
+                    with ui.row().classes('items-start'):
+                        ui.icon('location_on').classes(
+                            'text-green-600 mr-2 mt-1')
+                        ui.label(row.get('泄漏设备（位置）', 'N/A')
+                                 ).classes('text-gray-700')
+
+                # 事故经过卡片
+                with ui.card().classes('w-full p-4 bg-amber-50'):
+                    ui.label('事故经过概要').classes(
+                        'text-lg font-bold text-amber-700 mb-2')
+                    with ui.row().classes('items-start'):
+                        ui.icon('description').classes(
+                            'text-amber-600 mr-2 mt-1')
+                        ui.label(row.get('事故经过概要', 'N/A')
+                                 ).classes('text-gray-700')
+
+                # 损失危害卡片
+                with ui.card().classes('w-full p-4 bg-red-50'):
+                    ui.label('造成损失及危害').classes(
+                        'text-lg font-bold text-red-700 mb-2')
+                    with ui.row().classes('items-start'):
+                        ui.icon('error').classes('text-red-600 mr-2 mt-1')
+                        ui.label(row.get('造成损失及危害', 'N/A')
+                                 ).classes('text-gray-700')
+
+                # 安全警示
+                with ui.card().classes('w-full p-4 bg-purple-50'):
+                    ui.label('安全警示').classes(
+                        'text-lg font-bold text-purple-700 mb-2')
+                    with ui.column().classes('gap-2'):
+                        ui.label('⚠️ 必须严格遵守安全操作规程').classes(
+                            'text-sm text-purple-600')
+                        ui.label('⚠️ 进入受限空间前必须进行气体检测').classes(
+                            'text-sm text-purple-600')
+                        ui.label('⚠️ 检修作业前必须可靠切断气源').classes(
+                            'text-sm text-purple-600')
+
+            ui.separator().classes('my-4')
+
+            # 操作按钮
+            with ui.row().classes('justify-end gap-2'):
+                ui.button('关闭', on_click=dialog.close)
+                ui.button('导出信息', icon='download',
+                          on_click=lambda: export_accident_info(row))
+
+        dialog.open()
+
+    def export_accident_info(row):
+        """导出事故信息"""
+        # 这里可以添加导出功能，比如生成PDF或下载文本文件
+        info = f"""
+案例详情报告
+============
+
+案例名称: {row.get('案例名称', 'N/A')}
+案例编号: {row.get('案例编号', 'N/A')}
+案例分类: {row.get('案例场景分类', 'N/A')}
+
+泄漏气体: {row.get('泄漏气体', 'N/A')}
+泄漏位置: {row.get('泄漏设备（位置）', 'N/A')}
+
+事故经过:
+{row.get('事故经过概要', 'N/A')}
+
+损失危害:
+{row.get('造成损失及危害', 'N/A')}
+
+报告时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+
+        # 创建临时文件并下载
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(info)
+            temp_path = f.name
+
+        ui.download(temp_path, filename=f"事故案例_{row.get('案例编号', '未知')}.txt")
+        ui.notify(f'已导出案例信息: {row.get("案例名称", "未知")}')
+
+    # 初始化显示
+    filter_accidents('所有案例')
+
+    return
+
+
 @ui.page('/caseBrowser')
 @with_layout
 async def case_browser_page():
-    ui.label('Case browser page')
-
-    ui.label('Case Browser').classes('text-h4 font-bold mb-4')
+    ui.label('仿真案例').classes('text-h4 font-bold mb-4')
 
     cases = sorted([e for e in CASE_FOLDER.iterdir() if e.is_dir()])
 
@@ -720,7 +1004,7 @@ async def case_browser_page():
 
     # 创建选择框
     with ui.row().classes('w-full items-center mb-4'):
-        ui.label('Select Case:').classes('mr-2')
+        ui.label('案例选择:').classes('mr-2')
         case_select = ui.select(
             options=[c.name for c in cases],
             value=cases[0].name if cases else None,
@@ -745,7 +1029,7 @@ async def case_browser_page():
             # 显示案例路径
             with ui.row().classes('items-center mb-3 p-2 bg-blue-50 rounded'):
                 ui.icon('folder_open').classes('text-blue-600 mr-2')
-                ui.label(f"Path: {case_path}").classes('text-sm')
+                ui.label(f"案例目录: {case_path}").classes('text-sm')
 
             # 构建文件树
             build_file_tree(case_path)
@@ -920,8 +1204,6 @@ async def profile_page() -> None:
 @ui.page('/sensors')
 @with_layout
 async def sensors_page():
-    ui.label('Sensors page')
-
     this_user = user_service.get_user_by_id(app.storage.user['id'])
     checks = [
         'create_content',
@@ -943,7 +1225,6 @@ async def sensors_page():
 @ui.page('/')
 @with_layout
 async def root():
-    ui.label('Home page')
 
     with make_it_center():
         # ui.link('Welcome page', '/welcome')
@@ -980,7 +1261,6 @@ async def root():
 @ui.page('/welcome')
 @with_layout
 async def welcome_page():
-    ui.label('Welcome page')
     with make_it_center():
         ui.label('Welcome to my project.')
         user = app.storage.user
@@ -1100,6 +1380,7 @@ def require_json_latest_sensor_data():
 @ui.page('/simulation')
 @with_layout
 async def simulation_page():
+    gases = gas_db.search_gases()
     geo_candidates = {
         '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 10},
         '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 10},
@@ -1108,7 +1389,10 @@ async def simulation_page():
     }
     default_zoom = 10
 
-    with ui.row():
+    # 左侧天气信息输入
+    with ui.card().classes('fixed left-4 top-40 w-80 p-4 shadow-lg z-10'):
+        ui.label('地理位置').classes('text-h6 mb-4')
+
         # 创建下拉选择框
         location_select = ui.select(
             options=list(geo_candidates.keys()),
@@ -1122,8 +1406,151 @@ async def simulation_page():
             min=1,
             max=20,
             step=1,
-            precision=0
+            precision=0,
+            label='地图缩放级别'
         ).classes('w-24')
+
+        ui.label('气象条件').classes('text-h6 mb-4')
+
+        weather_conditions = ui.select(
+            options=['晴', '多云', '阴', '雨', '雪', '雾'],
+            value='晴',
+            label='天气状况'
+        ).classes('w-full mb-4')
+
+        temperature = ui.number(
+            label='温度(℃)',
+            value=20,
+            min=-50,
+            max=50
+        ).classes('w-full mb-4')
+
+        humidity = ui.number(
+            label='湿度(%)',
+            value=50,
+            min=0,
+            max=100
+        ).classes('w-full mb-4')
+
+        wind_speed = ui.number(
+            label='风力(级)',
+            value=3,
+            min=0,
+            max=12
+        ).classes('w-full mb-4')
+
+        wind_direction = ui.select(
+            options=['北', '东北', '东', '东南', '南', '西南', '西', '西北'],
+            value='东',
+            label='风向'
+        ).classes('w-full')
+
+    # def update_gas():
+    #     selected_gas_name = gas_select.value
+    #     gas_info = [e for e in gases if e['气体名称'] == selected_gas_name][0]
+    #     gas_label.set_text(f'{gas_info=}')
+
+    # with ui.row():
+    #     gas_select = ui.select(
+    #         options=[g['气体名称'] for g in gases],
+    #         value=gases[0]['气体名称'] if gases else None,
+    #         label='选择气体'
+    #     ).classes('w-40')
+    #     gas_label = ui.label('').classes('ml-4')
+    # gas_select.on('update:model-value', update_gas)
+    # update_gas()
+
+    # 右侧气体信息显示
+    gas_card = ui.card().classes('fixed right-4 top-40 w-80 p-4 shadow-lg z-10')
+    with gas_card:
+        ui.label('气体属性').classes('text-h6 mb-4')
+
+        gas_select = ui.select(
+            options=[g['气体名称'] for g in gases],
+            value=gases[0]['气体名称'] if gases else None,
+            label='选择气体'
+        ).classes('w-full mb-6')
+
+        # 气体属性输入字段（字符串类型）
+        gas_name_input = ui.input(label='气体名称').classes(
+            'w-full mb-2').props('readonly')
+        toxicity_input = ui.input(label='毒性等级').classes('w-full mb-2')
+        idlh_input = ui.input(label='IDLH浓度').classes('w-full mb-2')
+        mac_input = ui.input(label='MAC浓度').classes('w-full mb-2')
+        safe_threshold_input = ui.input(label='安全阈值').classes('w-full mb-2')
+        warning_concentration_input = ui.input(
+            label='警戒浓度').classes('w-full mb-2')
+        danger_concentration_input = ui.input(
+            label='危险浓度').classes('w-full mb-2')
+
+        # 将输入字段存储到字典中以便访问
+        gas_inputs = {
+            '气体名称': gas_name_input,
+            '毒性等级': toxicity_input,
+            'IDLH浓度': idlh_input,
+            'MAC浓度': mac_input,
+            '安全阈值': safe_threshold_input,
+            '警戒浓度': warning_concentration_input,
+            '危险浓度': danger_concentration_input
+        }
+
+        # 添加保存按钮（如果需要保存修改）
+        # ui.button('保存修改', on_click=lambda: save_gas_changes(gas_inputs)).classes('w-full mt-4')
+
+    def update_gas_inputs():
+        """当气体选择改变时，填充所有输入字段"""
+        selected_gas_name = gas_select.value
+        if not selected_gas_name:
+            # 清空所有输入字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+            return
+
+        # 查找选中的气体信息
+        gas_info = next(
+            (e for e in gases if e['气体名称'] == selected_gas_name), None)
+
+        if gas_info:
+            # 将所有值转换为字符串并填充到输入字段中
+            gas_inputs['气体名称'].value = str(gas_info.get('气体名称', ''))
+            gas_inputs['毒性等级'].value = str(gas_info.get('毒性等级', ''))
+            gas_inputs['IDLH浓度'].value = str(gas_info.get('IDLH浓度', ''))
+            gas_inputs['MAC浓度'].value = str(gas_info.get('MAC浓度', ''))
+            gas_inputs['安全阈值'].value = str(gas_info.get('安全阈值', ''))
+            gas_inputs['警戒浓度'].value = str(gas_info.get('警戒浓度', ''))
+            gas_inputs['危险浓度'].value = str(gas_info.get('危险浓度', ''))
+
+            # 可选：根据字段类型设置输入类型
+            set_input_attributes(gas_info)
+        else:
+            # 如果找不到气体，清空所有字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+
+    def set_input_attributes(gas_info):
+        """根据数据类型设置输入属性"""
+        # 对于数值字段，可以设置输入类型
+        concentration_fields = ['IDLH浓度', 'MAC浓度', '安全阈值', '警戒浓度', '危险浓度']
+
+        for field in concentration_fields:
+            value = gas_info.get(field)
+            input_field = gas_inputs[field]
+
+            if isinstance(value, (int, float)):
+                # 设置为数字输入
+                input_field.props('type=number step=any')
+                # 可选：添加单位后缀
+                if field in ['IDLH浓度', 'MAC浓度', '警戒浓度', '危险浓度']:
+                    input_field.props(f'suffix=ppm')
+            else:
+                input_field.props('')
+
+    # 连接选择器变化事件
+    gas_select.on('update:model-value', update_gas_inputs)
+
+    # 初始填充（只在页面加载时执行一次）
+    if gases:
+        update_gas_inputs()
 
     def update_map():
         # 获取选择的地点
@@ -1164,9 +1591,9 @@ async def simulation_page():
         # 嵌入iframe来显示地图页面
         iframe = ui.html(f'''
 <div id='mapdiv'>
-    <iframe 
+    <iframe
         id="map-iframe"
-        src="/map" 
+        src="/map"
         style="width: 800px; height: 800px; border: none;"
         title="地图"
     ></iframe>
