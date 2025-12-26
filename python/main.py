@@ -1,4 +1,7 @@
 # %%
+import subprocess
+import uuid
+import os
 import json
 import contextlib
 import pandas as pd
@@ -1350,14 +1353,15 @@ def serve_pdf(case_name: str):
 
 
 @app.get('/map')
-def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '10'):
+def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '10', session: str = '???'):
     # params = dict(request.query_params)
-    print(f'Loading map, {lat=}, {lon=}')
+    print(f'Loading map, {lat=}, {lon=}, {zoom=}, {session=}')
     html_content = Path('static/html/map.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
         '"{{lon}}"': lon,
+        '{{session}}': session,
     }
     for k, v in changes.items():
         html_content = html_content.replace(k, v)
@@ -1377,9 +1381,59 @@ def require_json_latest_sensor_data():
     return HTMLResponse(obj, media_type='application/json')
 
 
+def simulate_with_fds():
+    dir = 'fds'
+    script = 'runme.ps1'
+    session = str(uuid.uuid4())
+    fds_setup = open(Path(dir) / 'sample.fds').read()
+    fds_file = Path(dir) / f'simulation_{session}.fds'
+
+    with open(fds_file, 'w') as f:
+        f.write(fds_setup)
+
+    args = f'-folder simulation/{session} -filename {fds_file.name}'
+    cmd = f'cd {dir} && powershell -ExecutionPolicy Bypass -File {script} {args}'
+
+    stdout = open(f'fds/simulation/stdout-{session}.txt', 'w')
+    stderr = open(f'fds/simulation/stderr-{session}.txt', 'w')
+
+    # 使用 subprocess.Popen 在后台运行
+    subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=stdout,
+        stderr=stderr,
+        # stdout=subprocess.DEVNULL,
+        # stderr=subprocess.DEVNULL,
+        start_new_session=True  # 创建新的进程组
+    )
+
+    return session
+
+
+@ui.page('/get_fds_simulation_result/{session}')
+async def get_fds_simulation_result(session: str):
+    dir = 'fds'
+    session_dir = Path(dir) / 'simulation' / session
+    files = list(session_dir.iterdir()) if session_dir.is_dir() else []
+    obj = {'files': [str(f.name) for f in files]}
+    return HTMLResponse(json.dumps(obj), media_type='application/json')
+
+
 @ui.page('/simulation')
 @with_layout
 async def simulation_page():
+    simulate_button = ui.button(
+        'Start Simulation', icon='play_arrow').props('color=primary')
+
+    def on_click():
+        session = simulate_with_fds()
+        update_map(session=session)
+        ui.notify(
+            f'Simulation started. Session ID: {session}', color='positive')
+
+    simulate_button.on('click', on_click)
+
     gases = gas_db.search_gases()
     geo_candidates = {
         '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 10},
@@ -1552,7 +1606,7 @@ async def simulation_page():
     if gases:
         update_gas_inputs()
 
-    def update_map():
+    def update_map(session='???'):
         # 获取选择的地点
         selected_location = location_select.value
         if selected_location in geo_candidates:
@@ -1560,7 +1614,7 @@ async def simulation_page():
             zoom = zoom_input.value if zoom_input.value else geo['zoom']
 
             # 构建包含参数的 URL
-            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}"
+            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}&session={session}"
 
             # 更新 iframe 的 src 属性
             js_code = f"""

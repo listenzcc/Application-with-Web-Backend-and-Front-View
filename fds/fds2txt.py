@@ -1,36 +1,12 @@
 # %%
-import time
-import shutil
-import tempfile
-from tqdm import tqdm
-import multiprocessing as mp
 import os
+import time
+import tempfile
 import pandas as pd
+import multiprocessing as mp
+
 from pathlib import Path
 from tqdm.auto import tqdm
-
-# %%
-# Constants
-WD = Path('../../received/4/')
-JOB_ID = '4'
-
-# cd to
-os.chdir(WD)
-
-# Make sure OUTPUT_DIR is clear
-OUTPUT_DIR = Path('./output')
-for e in OUTPUT_DIR.iterdir():
-    e.unlink(missing_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-# %%
-# Get times
-devc = pd.read_csv(f'{JOB_ID}_devc.csv', header=1)
-print(devc)
-
-times = devc['Time']
-times = times - times % 0.1
-print(times)
 
 # %%
 
@@ -47,7 +23,7 @@ def process_time_point(t, job_id, output_dir='output'):
         'timeStarting': f'{t:0.1f}',
         'timeEnding': f'{t + 0.1:0.1f}',
         'variablesToRead': 1,
-        'indexForVariables': 2,  # Slice axis: 1=y，2=x，3=z
+        'indexForVariables': 1,  # Slice axis: 1=y，2=x，3=z
         'fileName': f'{output_dir}/u-{t:0.1f}-{t+0.1:0.1f}.txt'
     }
 
@@ -66,7 +42,26 @@ def process_time_point(t, job_id, output_dir='output'):
     return t
 
 
-def main():
+# %%
+if __name__ == '__main__':
+    # Prepare directory and constants
+    JOB_ID = '4'
+
+    OUTPUT_DIR = Path('./output')
+    try:
+        os.remove(OUTPUT_DIR)
+    except:
+        pass
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Find the time points
+    devc = pd.read_csv(f'{JOB_ID}_devc.csv', header=1)
+    print(devc)
+    times = devc['Time']
+    times = times - times % 0.1
+    print(times)
+
+    # Processing
     # Determine number of processes to use
     num_processes = min(mp.cpu_count(), len(times))
 
@@ -92,8 +87,46 @@ def main():
     print(f"Processing complete ({passed:.4f} seconds)!")
 
 
-# %%
-if __name__ == '__main__':
-    main()
+# # %% -------------------------
+# JOB_ID = '4'
 
-# %%
+# # %%
+# OUTPUT_DIR = Path('./output')
+# try:
+#     os.remove(OUTPUT_DIR)
+# except:
+#     pass
+# OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# # %%
+# devc = pd.read_csv(f'{JOB_ID}_devc.csv', header=1)
+# print(devc)
+
+# times = devc['Time']
+# times = times - times % 0.1
+# print(times)
+
+# # %%
+# conf = {
+#     'jobID': JOB_ID,
+#     'type': 2,
+#     'samplingFactor': 1,
+#     'domainSelection': 'n',
+#     'timeStarting': None,
+#     'timeEnding': None,
+#     'variablesToRead': 1,
+#     'indexForVariables': 3,  # Slice axis: 1=y，2=x，3=z
+#     'fileName': None
+# }
+
+
+# for t in tqdm(times, 'Computing times'):
+#     conf['timeStarting'] = f'{t:0.1f}'
+#     conf['timeEnding'] = f'{t + 0.1:0.1f}'
+#     conf['fileName'] = f'output/u-{t:0.1f}-{t+0.1:0.1f}.txt'
+
+#     with open('input.txt', 'w') as f:
+#         f.write('\n'.join([str(e) for e in conf.values()]))
+
+#     os.system('fds2ascii < input.txt')

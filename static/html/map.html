@@ -36,6 +36,31 @@
         </div>
     </div>
     <script>
+        const sessionStr = "{{session}}";
+        const sessionApiUrl = `/get_fds_simulation_result/${sessionStr}`;
+
+        /**
+         * 定时检查模拟结果是否生成完成
+         */
+        function timelyCheck() {
+            const response = fetch(sessionApiUrl);
+            response.then(async (response) => {
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+
+                const resp = await response.json();
+                console.log(resp)
+                // 如果生成结果中不包含 'generated.gif'，则继续定时检查
+                if (!resp.files.includes('generated.gif')) {
+                    setTimeout(timelyCheck, 1000);
+                }
+            });
+        }
+        timelyCheck();
+    </script>
+
+    <script>
         mapboxgl.accessToken = 'pk.eyJ1IjoibGlzdGVuemNjIiwiYSI6ImNrMzU5MmpxZDAxMXEzbXQ0dnd4YTZ2NDAifQ.GohcgYXFsbDqfsi_7SXdpA';
         const map = new mapboxgl.Map({
             container: 'map',
@@ -45,6 +70,8 @@
             // center: [116.3912757, 39.906217] // 经度，纬度
             center: ["{{lon}}", "{{lat}}"] // 经度，纬度
         });
+
+        console.log(`Simulation session: ${sessionStr}`);
 
         map.addControl(new mapboxgl.NavigationControl());
         // map.scrollZoom.disable();
