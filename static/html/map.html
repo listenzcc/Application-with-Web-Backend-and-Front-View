@@ -32,6 +32,8 @@
         <div id="map"></div>
         <div id="overlap" class="click-through" style="z-index:100; position: fixed">
         </div>
+        <div id="simulation" class="click-through" style="z-index:100; position: fixed">
+        </div>
     </div>
     <script>
         mapboxgl.accessToken = 'pk.eyJ1IjoibGlzdGVuemNjIiwiYSI6ImNrMzU5MmpxZDAxMXEzbXQ0dnd4YTZ2NDAifQ.GohcgYXFsbDqfsi_7SXdpA';
@@ -55,8 +57,86 @@
         map.on('load', () => {
             setupCanvasOverlay();
             setupCanvasOverlay1();
+            setupSimulationOverlay();
         });
 
+        /**
+         * 设置覆盖在地图上的模拟仿真Canvas
+         */
+        function setupSimulationOverlay() {
+            // Similar to setupCanvasOverlay, but for simulation overlay
+            const simulationDiv = document.getElementById('simulation');
+            const mapDiv = document.getElementById('map');
+            // Create canvas element
+            const canvas = document.createElement('canvas');
+            canvas.id = 'simulationCanvas';
+            simulationDiv.appendChild(canvas);
+            // Get canvas context
+            const ctx = canvas.getContext('2d');
+            // Put the image on the ctx, image url is '/static/img/frame_030.png'
+            const image = new Image();
+
+            // Set canvas dimensions to match the container
+            function resizeCanvas() {
+                canvas.width = mapDiv.offsetWidth;
+                canvas.height = mapDiv.offsetHeight;
+                drawOnCanvas();
+            }
+
+            // Initial resize
+            resizeCanvas();
+
+            function drawOnCanvas() {
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                image.src = '/static/img/frame_030.png';
+                image.onload = () => {
+                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    console.log('Simulation image loaded and drawn on canvas');
+                    // 获取图像数据
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+
+                    // 处理每个像素
+                    for (let i = 0; i < data.length; i += 4) {
+                        const r = data[i];      // 红色通道（灰度图中三个通道值相同）
+                        const g = data[i + 1];  // 绿色通道
+                        const b = data[i + 2];  // 蓝色通道
+                        const a = data[i + 3];  // 透明度通道
+
+                        // 计算灰度值（取平均值）
+                        const gray = (r + g + b) / 3;
+
+                        if (gray === 0) {
+                            // 黑色像素：完全透明
+                            data[i + 3] = 0;
+                        } else {
+                            // 非黑色像素：使用Reds配色方案
+                            // 将灰度值映射到红色强度（0-255）
+                            // 同时保持一定透明度以保留原始灰度层次
+                            const redIntensity = Math.floor((gray / 255) * 255);
+
+                            // 设置红色通道
+                            data[i] = redIntensity;      // 红色
+                            data[i + 1] = Math.floor(redIntensity * 0.1);  // 少量绿色
+                            data[i + 2] = Math.floor(redIntensity * 0.1);  // 少量蓝色
+
+                            // 根据灰度值设置透明度（越白越不透明）
+                            data[i + 3] = Math.floor((gray / 255) * 255);
+                        }
+                    }
+
+                    // 将处理后的图像数据放回画布
+                    ctx.putImageData(imageData, 0, 0);
+
+                    console.log('Simulation image loaded and drawn with red color scheme');
+                };
+            }
+        }
+
+        /**
+         * 设置覆盖在地图上的Canvas
+         */
         function setupCanvasOverlay() {
             const overlapDiv = document.getElementById('overlap');
             const mapDiv = document.getElementById('map');
