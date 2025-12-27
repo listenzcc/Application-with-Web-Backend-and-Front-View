@@ -1,7 +1,4 @@
 # %%
-import subprocess
-import uuid
-import os
 import json
 import contextlib
 import pandas as pd
@@ -31,7 +28,9 @@ from util.user_session_manager import UserSessionManager
 
 from explorer.toxic_gas import ToxicGasDatabase
 
-from components.layout import with_layout
+from components.layout import with_layout, with_layout_full_width
+
+from fds.simulate import simulate_with_fds, get_fds_simulation_result_history
 
 # %%
 PROJECT = OmegaConf.load('conf/project.yml')
@@ -41,7 +40,6 @@ abstract = abstract.replace('\n', '\n\n')
 # %%
 # Add static directory - This must be done BEFORE any UI elements
 app.add_static_files('/static', 'static')  # URL path, local folder %%
-# 在应用启动时设置全局标题和图标
 
 
 # %%
@@ -1381,53 +1379,63 @@ def require_json_latest_sensor_data():
     return HTMLResponse(obj, media_type='application/json')
 
 
-def simulate_with_fds():
-    dir = 'fds'
-    script = 'runme.ps1'
-    session = str(uuid.uuid4())
-    fds_setup = open(Path(dir) / 'sample.fds').read()
-    fds_file = Path(dir) / f'simulation_{session}.fds'
-
-    with open(fds_file, 'w') as f:
-        f.write(fds_setup)
-
-    args = f'-folder simulation/{session} -filename {fds_file.name}'
-    cmd = f'cd {dir} && powershell -ExecutionPolicy Bypass -File {script} {args}'
-
-    stdout = open(f'fds/simulation/stdout-{session}.txt', 'w')
-    stderr = open(f'fds/simulation/stderr-{session}.txt', 'w')
-
-    # 使用 subprocess.Popen 在后台运行
-    subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=stdout,
-        stderr=stderr,
-        # stdout=subprocess.DEVNULL,
-        # stderr=subprocess.DEVNULL,
-        start_new_session=True  # 创建新的进程组
-    )
-
-    return session
-
-
 @ui.page('/get_fds_simulation_result/{session}')
 async def get_fds_simulation_result(session: str):
     dir = 'fds'
     session_dir = Path(dir) / 'simulation' / session
     files = list(session_dir.iterdir()) if session_dir.is_dir() else []
+    files.extend(list((session_dir / 'img').iterdir()))
     obj = {'files': [str(f.name) for f in files]}
     return HTMLResponse(json.dumps(obj), media_type='application/json')
 
 
-@ui.page('/simulation')
-@with_layout
-async def simulation_page():
-    simulate_button = ui.button(
-        'Start Simulation', icon='play_arrow').props('color=primary')
+@ui.page('/get_fds_simulation_frame')
+async def get_fds_simulation_frame(session: str, frame: str):
+    dir = 'fds'
+    session_dir = Path(dir) / 'simulation' / session / 'img' / frame
+    if not session_dir.is_file():
+        return HTMLResponse('File not found', status_code=404)
+    print(session_dir)
+    return FileResponse(session_dir, media_type='image/png')
 
+
+@ui.page('/simulation')
+@with_layout_full_width
+async def simulation_page():
+    with ui.row().classes('w-[1200px] justify-center gap-4'):
+        simulate_button = ui.button(
+            'Start Simulation', icon='play_arrow').props('color=primary')
+
+        simulation_history_select = ui.select(
+            options=[], label='Simulation History').classes('w-64')
+
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    # Simulation history
+    def on_select_session(e):
+        session = e.value
+        update_map(session=session)
+
+    simulation_history = get_fds_simulation_result_history()
+    print(simulation_history)
+    simulation_history_select.options = [e for e in simulation_history]
+    simulation_history_select.update()
+    simulation_history_select.on_value_change(on_select_session)
+
+    # Simulate button action
     def on_click():
-        session = simulate_with_fds()
+        reader = SensorDataReader()
+        sensors = reader.get_sensor_info()
+        for s in sensors:
+            try:
+                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+            except:
+                pass
+        session = simulate_with_fds(sensors)
         update_map(session=session)
         ui.notify(
             f'Simulation started. Session ID: {session}', color='positive')
@@ -1444,7 +1452,7 @@ async def simulation_page():
     default_zoom = 10
 
     # 左侧天气信息输入
-    with ui.card().classes('fixed left-4 top-40 w-80 p-4 shadow-lg z-10'):
+    with weather_card:
         ui.label('地理位置').classes('text-h6 mb-4')
 
         # 创建下拉选择框
@@ -1499,23 +1507,7 @@ async def simulation_page():
             label='风向'
         ).classes('w-full')
 
-    # def update_gas():
-    #     selected_gas_name = gas_select.value
-    #     gas_info = [e for e in gases if e['气体名称'] == selected_gas_name][0]
-    #     gas_label.set_text(f'{gas_info=}')
-
-    # with ui.row():
-    #     gas_select = ui.select(
-    #         options=[g['气体名称'] for g in gases],
-    #         value=gases[0]['气体名称'] if gases else None,
-    #         label='选择气体'
-    #     ).classes('w-40')
-    #     gas_label = ui.label('').classes('ml-4')
-    # gas_select.on('update:model-value', update_gas)
-    # update_gas()
-
     # 右侧气体信息显示
-    gas_card = ui.card().classes('fixed right-4 top-40 w-80 p-4 shadow-lg z-10')
     with gas_card:
         ui.label('气体属性').classes('text-h6 mb-4')
 
@@ -1630,18 +1622,7 @@ async def simulation_page():
     location_select.on('update:model-value', update_map)
     zoom_input.on_value_change(update_map)
 
-    # def on_click():
-    #     # 通过 id 获取 iframe 元素并修改其 src 属性
-    #     js_code = """
-    #     var iframe = document.getElementById('map-iframe');
-    #     if (iframe) {
-    #         iframe.src = '/map?zoom=5';
-    #     }
-    #     """
-    #     ui.run_javascript(js_code)
-
-    # button = ui.button('Click me.', on_click=on_click)
-    with ui.card().classes('w-full h-full p-0 m-0').classes('items-center'):
+    with map_card:
         # 嵌入iframe来显示地图页面
         iframe = ui.html(f'''
 <div id='mapdiv'>
@@ -1653,6 +1634,7 @@ async def simulation_page():
     ></iframe>
 </div>
 ''', sanitize=False)
+
     return
 
 

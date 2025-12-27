@@ -97,7 +97,14 @@ class SensorDataReader:
             conn.close()
 
     def get_sensor_info(self) -> List[Dict]:
-        """获取所有传感器信息"""
+        """
+        获取所有传感器信息
+        [{'sensor_id': 'humidity_001',
+        'x_position': 0.9514525691656605,
+        'y_position': 0.09367519259143087,
+        'created_at': '2025-12-10 06:42:40',
+        'last_updated': '2025-12-11 19:34:10.585190'}]
+        """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()

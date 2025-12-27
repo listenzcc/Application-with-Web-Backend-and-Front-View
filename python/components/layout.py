@@ -8,6 +8,40 @@ project_name = conf['name']
 email = conf['email']
 
 
+def with_layout_full_width(func: Callable) -> Callable:
+    """为页面添加公共header和footer的装饰器"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        # ui.add_head_html(f'<title>{project_name}</title>')
+        # ui.add_head_html(
+        #     f'<link rel="icon" href="/static/favicon.ico" type="image/x-icon">')
+        # 添加公共header
+        create_header()
+
+        # 页面主要内容区域
+        with ui.column().classes('w-full mx-auto p-4 min-h-[calc(100vh-130px)]'):
+            await func(*args, **kwargs)
+
+        # 添加公共footer
+        create_footer()
+
+        ui.add_head_html('''
+        <style>
+            body {
+                background-color: #f0f0f0;
+                background-image: url('/static/img/background.avif');
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+                background-blend-mode: overlay;
+            }
+        </style>
+        ''')
+
+    return wrapper
+
+
 def with_layout(func: Callable) -> Callable:
     """为页面添加公共header和footer的装饰器"""
     @wraps(func)

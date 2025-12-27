@@ -1,2 +1,4 @@
 simulation
 *.fds
+sensors_*
+simulation_*
