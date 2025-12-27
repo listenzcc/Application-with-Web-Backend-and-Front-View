@@ -72,10 +72,6 @@
                             sessionSelect.appendChild(option);
                         }
                     });
-                    sessionSelect.onchange = () => {
-                        // 触发simulation overlay的更新
-                        setupSimulationOverlay();
-                    };
                 }
 
             });
@@ -135,15 +131,20 @@
             // Initial resize
             resizeCanvas();
 
+            sessionSelect.onchange = () => {
+                // 触发simulation overlay的更新
+                drawOnCanvas();
+            };
+
             function drawOnCanvas() {
                 // Clear canvas
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // ctx.clearRect(0, 0, canvas.width, canvas.height);
                 const frame = document.getElementById('sessionSelect').value;
                 const url = `/get_fds_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
                 const image = new Image();
                 image.src = url;
                 image.onload = () => {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    // ctx.clearRect(0, 0, canvas.width, canvas.height);
                     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
                     console.log('Simulation image loaded and drawn on canvas, image=', image);
                     // 获取图像数据
