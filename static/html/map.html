@@ -5,8 +5,13 @@
     <meta charset="utf-8">
     <title>Guides</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.css" rel="stylesheet">
-    <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.js"></script>
+    <!-- <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.css" rel="stylesheet"> -->
+    <link href="/static/src/mapbox-gl.css" rel="stylesheet">
+    <!-- <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.js"></script> -->
+    <script src="/static/src/mapbox-gl.js"></script>
+    <!-- 加载整个 Turf.js 库 -->
+    <!-- <script src='https://unpkg.com/@turf/turf@7/turf.min.js'></script> -->
+    <script src="/static/src/turf.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -38,13 +43,25 @@
     </div>
     <div style="z-index: 200; position: absolute">
         <!-- Options for session frames -->
-        <select id="sessionSelect">
-        </select>
+        <div>
+            <select id="sessionSelect">
+            </select>
+            <span>----</span>
+            Geometry Limits:
+            <span id="minLat"></span>
+            <span id="maxLat"></span>
+            <span id="minLon"></span>
+            <span id="maxLon"></span>
+        </div>
     </div>
+    <script>
+        console.log('Turf version:', turf, turf.version);
+    </script>
 
     <script>
         const sessionStr = "{{session}}";
-        const sessionApiUrl = `/get_fds_simulation_result/${sessionStr}`;
+        const sessionApiUrl = `/get_hysplit_simulation_result/${sessionStr}`;
+        const geoLimitsUrl = `/get_hysplit_simulation_table_json/?session=${sessionStr}`;
 
         /**
          * 定时检查模拟结果是否生成完成
@@ -58,8 +75,8 @@
 
                 const resp = await response.json();
                 console.log(resp)
-                // 如果生成结果中不包含 'generated.gif'，则继续定时检查
-                if (!resp.files.includes('generated.gif')) {
+                // 如果生成结果中不包含 'table.json'，则继续定时检查
+                if (!resp.files.includes('table.json')) {
                     setTimeout(timelyCheck, 1000);
                 } else {
                     // 结果生成完成，填充下拉选项
@@ -72,6 +89,7 @@
                             sessionSelect.appendChild(option);
                         }
                     });
+
                 }
 
             });
@@ -89,6 +107,8 @@
             // center: [116.3912757, 39.906217] // 经度，纬度
             center: ["{{lon}}", "{{lat}}"] // 经度，纬度
         });
+
+        const mapMarkers = {};
 
         console.log(`Simulation session: ${sessionStr}`);
 
@@ -139,11 +159,168 @@
             function drawOnCanvas() {
                 // Clear canvas
                 // ctx.clearRect(0, 0, canvas.width, canvas.height);
-                const frame = document.getElementById('sessionSelect').value;
-                const url = `/get_fds_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
+                const frame = document.getElementById('sessionSelect').value,
+                    day = parseInt(frame.slice(0, 3)),
+                    hr = parseInt(frame.slice(4, 6));
+                console.log(frame, day, hr)
+
+                if (true) {
+                    const response1 = fetch(geoLimitsUrl)
+                    response1.then(async (response) => {
+                        const resp = await response.json();
+                        const points = []
+                        for (let i in resp['LON']) {
+                            if (day !== resp['DAY'][i] | hr !== resp['HR'][i]) continue
+                            points.push({ lon: resp['LON'][i], lat: resp['LAT'][i], value: resp['m'][i] })
+                            // if (i > 100) break;
+                        }
+                        console.log(points)
+                        // 提取所有值
+                        const values = points.map(p => p.value);
+
+                        // 获取最小值和最大值
+                        const minValue = Math.min(...values);
+                        const maxValue = Math.max(...values);
+                        // 均匀分割成 5 个值（用于 isobands）
+                        const numIntervals = 5; // 需要 5 个分割点，实际会产生 4 个区间
+                        const breaks = [];
+
+                        for (let i = 0; i <= numIntervals; i++) {
+                            const value = minValue + (maxValue - minValue) * (i / numIntervals);
+                            breaks.push(parseFloat(value.toFixed(2))); // 保留两位小数
+                        }
+
+                        console.log('均匀分割的值:', breaks);
+                        console.log(`范围: ${minValue.toFixed(2)} 到 ${maxValue.toFixed(2)}`);
+                        console.log('生成的区间:', breaks.slice(0, -1).map((v, i) =>
+                            `${v.toFixed(2)} - ${breaks[i + 1].toFixed(2)}`
+                        ));
+
+                        // 转换为 Turf FeatureCollection
+                        const features = points.map(point =>
+                            turf.point([point.lon, point.lat], { value: point.value })
+                        );
+                        console.log(features)
+
+                        const featureCollection = turf.featureCollection(features);
+                        console.log(featureCollection)
+
+                        // 生成网格
+                        featureCollection.features.forEach(f => console.log(f.geometry.type));
+                        const grid = turf.interpolate(featureCollection, 0.1, {
+                            gridType: 'points',
+                            property: 'value',
+                            units: 'degrees'
+                        });
+                        console.log(grid)
+
+                        // 移除旧图层
+                        if (map.getLayer('heatmap-layer')) {
+                            map.removeLayer('heatmap-layer');
+                        }
+
+                        // 移除旧源
+                        if (map.getSource('heatmap-points')) {
+                            map.removeSource('heatmap-points');
+                        }
+
+                        // 直接使用点数据创建热力图效果
+                        map.addSource('heatmap-points', {
+                            type: 'geojson',
+                            //data: grid
+                            data: featureCollection
+                        });
+
+                        const vmin = 0, vmax = 5;
+
+                        // 移除热力图图层，改用circle图层
+                        map.addLayer({
+                            id: 'heatmap-layer',
+                            type: 'circle',
+                            source: 'heatmap-points',
+                            paint: {
+                                // 半径根据值变化
+                                'circle-radius': [
+                                    'interpolate',
+                                    ['linear'],
+                                    ['get', 'value'],
+                                    vmin, 5,    // 最小值对应的半径
+                                    vmax, 30    // 最大值对应的半径
+                                ],
+                                // 颜色根据值变化
+                                'circle-color': [
+                                    'interpolate',
+                                    ['linear'],
+                                    ['get', 'value'],
+                                    vmin, '#440154',      // 最小值颜色
+                                    (vmin + vmax) * 0.25, '#414487',
+                                    (vmin + vmax) * 0.5, '#2A788E',
+                                    (vmin + vmax) * 0.75, '#22A884',
+                                    vmax, '#FDE725'       // 最大值颜色
+                                ],
+                                // 添加模糊效果，模拟热力图
+                                'circle-blur': 0.7,
+                                'circle-opacity': 0.5,
+                                // 根据缩放调整
+                                'circle-stroke-width': [
+                                    'interpolate',
+                                    ['linear'],
+                                    ['zoom'],
+                                    0, 0,
+                                    9, 1
+                                ],
+                                'circle-stroke-color': 'rgba(255,255,255,0.0)'
+                            }
+                        });
+
+                        // 热力图图层
+                        // map.addLayer({
+                        //     id: 'heatmap-layer',
+                        //     type: 'heatmap',
+                        //     source: 'heatmap-points',
+                        //     paint: {
+                        //         // 热力图颜色渐变
+                        //         'heatmap-color': [
+                        //             'interpolate',
+                        //             ['linear'],
+                        //             ['heatmap-density'],
+                        //             0, 'rgba(68, 1, 84, 0)',
+                        //             0.1, 'rgba(68, 1, 84, 50)',
+                        //             0.2, '#440154',
+                        //             0.4, '#414487',
+                        //             0.6, '#2A788E',
+                        //             0.8, '#22A884',
+                        //             1, '#FDE725'
+                        //         ],
+                        //         // 调整热力图强度
+                        //         'heatmap-intensity': [
+                        //             'interpolate',
+                        //             ['linear'],
+                        //             ['zoom'],
+                        //             0, 1,
+                        //             9, 3
+                        //         ],
+                        //         // 热力点半径
+                        //         'heatmap-radius': [
+                        //             'interpolate',
+                        //             ['linear'],
+                        //             ['zoom'],
+                        //             0, 2,
+                        //             9, 20
+                        //         ],
+                        //         // 热力图不透明度
+                        //         'heatmap-opacity': 0.7
+                        //     }
+                        // });
+
+                    })
+                }
+
+                const url = `/get_hysplit_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
                 const image = new Image();
                 image.src = url;
                 image.onload = () => {
+                    return;
                     // ctx.clearRect(0, 0, canvas.width, canvas.height);
                     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
                     console.log('Simulation image loaded and drawn on canvas, image=', image);
@@ -165,7 +342,7 @@
                         const a = data[i + 3];  // 透明度通道
 
                         // 计算灰度值（取平均值）
-                        const gray = (r + g + b) / 3;
+                        const gray = 255 - (r + g + b) / 3;
 
                         if (gray === 0) {
                             // 黑色像素：完全透明
@@ -236,6 +413,7 @@
             function drawOnCanvas() {
                 // Clear canvas
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                return
 
                 // Example: Draw a semi-transparent rectangle
                 ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
@@ -384,18 +562,49 @@
 
             const style = styles[type] || styles.default;
 
-            // 转换坐标 (0-1 相对坐标 → 像素坐标)
-            const x = sensor.x_position * canvas.width;
-            const y = sensor.y_position * canvas.height;
+            const lat1 = 30, lat2 = 33, lon1 = 110, lon2 = 121;
+            const lat = (1 - sensor.y_position) * (lat2 - lat1) + lat1,
+                lon = sensor.x_position * (lon2 - lon1) + lon1;
 
-            // 保存上下文状态
-            ctx.save();
+            if (sensorId in mapMarkers) {
+                // The mapMarkers has sensorId
+                const { el } = mapMarkers[sensorId];
+                el.innerHTML = '<div>' + sensorId + '</div><div>' + sensor.value.toFixed(4) + '</div>';
+            } else {
+                // The mapMarkers does not have sensorId
+                const el = document.createElement('div');
+                el.innerHTML = sensorId
+                const marker = new mapboxgl.Marker({
+                    color: style.color,
+                    scale: 1.0        // scale the marker size
+                })
+                    .setLngLat([lon, lat])
+                    .addTo(map);
 
-            // 绘制传感器点
-            drawSensor(ctx, x, y, sensor, style, styles.fontSize, styles.fontFamily);
+                const tMarker = new mapboxgl.Marker({
+                    element: el, // 使用自定义HTML元素
+                    color: style.color,
+                    anchor: 'top', // 锚点位置
+                    scale: 1.0        // scale the marker size
+                })
+                    .setLngLat([lon, lat])
+                    .addTo(map);
 
-            // 恢复上下文状态
-            ctx.restore();
+                mapMarkers[sensorId] = Object.assign({}, { marker, el, tMarker })
+            }
+
+            // // 转换坐标 (0-1 相对坐标 → 像素坐标)
+            // const x = sensor.x_position * canvas.width;
+            // const y = sensor.y_position * canvas.height;
+
+            // // 保存上下文状态
+            // ctx.save();
+
+            // // 绘制传感器点
+            // drawSensor(ctx, x, y, sensor, style, styles.fontSize, styles.fontFamily);
+
+            // // 恢复上下文状态
+            // ctx.restore();
         }
 
         /**
@@ -472,7 +681,7 @@
                 ).then(sensors => {
                     // console.log(`更新了 ${sensors.length} 个传感器`);
                 });
-            }, 1000); // 每1秒更新一次
+            }, 5000); // 每5秒更新一次
         }
     </script>
 </body>

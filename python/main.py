@@ -31,6 +31,7 @@ from explorer.toxic_gas import ToxicGasDatabase
 from components.layout import with_layout, with_layout_full_width
 
 from fds.simulate import simulate_with_fds, get_fds_simulation_result_history
+from hysplit.simulate import simulate_with_hysplit, get_hysplit_simulation_result_history
 
 # %%
 PROJECT = OmegaConf.load('conf/project.yml')
@@ -1351,7 +1352,7 @@ def serve_pdf(case_name: str):
 
 
 @app.get('/map')
-def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '10', session: str = '???'):
+def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
     # params = dict(request.query_params)
     print(f'Loading map, {lat=}, {lon=}, {zoom=}, {session=}')
     html_content = Path('static/html/map.html').read_text(encoding='utf-8')
@@ -1379,6 +1380,8 @@ def require_json_latest_sensor_data():
     return HTMLResponse(obj, media_type='application/json')
 
 
+# ---------------------------------------------------------------------------
+# fds
 @ui.page('/get_fds_simulation_result/{session}')
 async def get_fds_simulation_result(session: str):
     dir = 'fds'
@@ -1397,6 +1400,38 @@ async def get_fds_simulation_frame(session: str, frame: str):
         return HTMLResponse('File not found', status_code=404)
     print(session_dir)
     return FileResponse(session_dir, media_type='image/png')
+
+
+# ---------------------------------------------------------------------------
+# hysplit
+@ui.page('/get_hysplit_simulation_result/{session}')
+async def get_hysplit_simulation_result(session: str):
+    dir = 'hysplit'
+    session_dir = Path(dir) / 'simulation' / session
+    files = list(session_dir.iterdir()) if session_dir.is_dir() else []
+    files.extend(list((session_dir / 'img').iterdir()))
+    obj = {'files': [str(f.name) for f in files]}
+    return HTMLResponse(json.dumps(obj), media_type='application/json')
+
+
+@ui.page('/get_hysplit_simulation_frame')
+async def get_hysplit_simulation_frame(session: str, frame: str):
+    dir = 'hysplit'
+    session_dir = Path(dir) / 'simulation' / session / 'img' / frame
+    if not session_dir.is_file():
+        return HTMLResponse('File not found', status_code=404)
+    # print(session_dir)
+    return FileResponse(session_dir, media_type='image/png')
+
+
+@ui.page('/get_hysplit_simulation_table_json')
+async def get_hysplit_simulation_table_json(session: str):
+    dir = 'hysplit'
+    obj = json.load(open(Path(dir) / 'simulation' /
+                    session / 'table.json'))
+    return HTMLResponse(json.dumps(obj), media_type='application/json')
+
+# ---------------------------------------------------------------------------
 
 
 @ui.page('/simulation')
@@ -1420,7 +1455,8 @@ async def simulation_page():
         session = e.value
         update_map(session=session)
 
-    simulation_history = get_fds_simulation_result_history()
+    # simulation_history = get_fds_simulation_result_history()
+    simulation_history = get_hysplit_simulation_result_history()
     print(simulation_history)
     simulation_history_select.options = [e for e in simulation_history]
     simulation_history_select.update()
@@ -1435,7 +1471,8 @@ async def simulation_page():
                 s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
             except:
                 pass
-        session = simulate_with_fds(sensors)
+        # session = simulate_with_fds(sensors)
+        session = simulate_with_hysplit(sensors)
         update_map(session=session)
         ui.notify(
             f'Simulation started. Session ID: {session}', color='positive')
@@ -1444,12 +1481,12 @@ async def simulation_page():
 
     gases = gas_db.search_gases()
     geo_candidates = {
-        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 10},
-        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 10},
-        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 10},
-        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 10},
+        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
+        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
+        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 4},
+        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 4},
     }
-    default_zoom = 10
+    default_zoom = 4
 
     # 左侧天气信息输入
     with weather_card:
@@ -1654,7 +1691,7 @@ if __name__ in {'__main__', '__mp_main__'}:
     ui.run(root,
            title=PROJECT.get('name', 'Project'),
            favicon='./static/favicon/favicon.ico',
-           uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log',
+           uvicorn_reload_excludes='.*, .py[cod], .sw.*, ~*, *.db, *.log, fds, hysplit',
            storage_secret='abcdefg',
            **kwargs)
 
