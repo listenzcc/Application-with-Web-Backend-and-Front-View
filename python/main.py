@@ -1367,6 +1367,19 @@ def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', 
     return HTMLResponse(content=html_content)
 
 
+@app.get('/room')
+def show_room(session: str = '???'):
+    # params = dict(request.query_params)
+    print(f'Loading map, {session=}')
+    html_content = Path('static/html/room.html').read_text(encoding='utf-8')
+    changes = {
+        '{{session}}': session,
+    }
+    for k, v in changes.items():
+        html_content = html_content.replace(k, v)
+    return HTMLResponse(content=html_content)
+
+
 @app.get('/latest_sensor_data')
 def require_json_latest_sensor_data():
     reader = SensorDataReader()
@@ -1434,15 +1447,206 @@ async def get_hysplit_simulation_table_json(session: str):
 # ---------------------------------------------------------------------------
 
 
+@ui.page('/simulationFDS')
+@with_layout_full_width
+async def simulation_page_fds():
+    with ui.row().classes('w-[1200px] justify-center flex items-end'):
+        simulate_button = ui.button(
+            '开始 FDS 模拟', icon='play_arrow').props('color=primary')
+
+        simulation_history_select = ui.select(
+            options=[], label='载入历史模拟').classes('w-64')
+
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    gases = gas_db.search_gases()
+    geo_candidates = {
+        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
+        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
+        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 4},
+        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 4},
+    }
+    default_zoom = 4
+
+    # 左侧天气信息输入
+    with weather_card:
+        ui.label('地理位置').classes('text-h6 mb-4')
+
+        # 创建下拉选择框
+        location_select = ui.select(
+            options=list(geo_candidates.keys()),
+            value='北京',
+            label='选择地点'
+        ).classes('w-40')
+
+        # 创建数字输入框
+        zoom_input = ui.number(
+            value=default_zoom,
+            min=1,
+            max=20,
+            step=1,
+            precision=0,
+            label='地图缩放级别'
+        ).classes('w-24')
+
+        ui.label('气象条件').classes('text-h6 mb-4')
+
+        weather_conditions = ui.select(
+            options=['晴', '多云', '阴', '雨', '雪', '雾'],
+            value='晴',
+            label='天气状况'
+        ).classes('w-full mb-4')
+
+        temperature = ui.number(
+            label='温度(℃)',
+            value=20,
+            min=-50,
+            max=50
+        ).classes('w-full mb-4')
+
+        humidity = ui.number(
+            label='湿度(%)',
+            value=50,
+            min=0,
+            max=100
+        ).classes('w-full mb-4')
+
+        wind_speed = ui.number(
+            label='风力(级)',
+            value=3,
+            min=0,
+            max=12
+        ).classes('w-full mb-4')
+
+        wind_direction = ui.select(
+            options=['北', '东北', '东', '东南', '南', '西南', '西', '西北'],
+            value='东',
+            label='风向'
+        ).classes('w-full')
+
+    # 右侧气体信息显示
+    with gas_card:
+        ui.label('气体属性').classes('text-h6 mb-4')
+
+        gas_select = ui.select(
+            options=[g['气体名称'] for g in gases],
+            value=gases[0]['气体名称'] if gases else None,
+            label='选择气体'
+        ).classes('w-full mb-6')
+
+        # 气体属性输入字段（字符串类型）
+        gas_name_input = ui.input(label='气体名称').classes(
+            'w-full mb-2').props('readonly')
+        toxicity_input = ui.input(label='毒性等级').classes('w-full mb-2')
+        idlh_input = ui.input(label='IDLH浓度').classes('w-full mb-2')
+        mac_input = ui.input(label='MAC浓度').classes('w-full mb-2')
+        safe_threshold_input = ui.input(label='安全阈值').classes('w-full mb-2')
+        warning_concentration_input = ui.input(
+            label='警戒浓度').classes('w-full mb-2')
+        danger_concentration_input = ui.input(
+            label='危险浓度').classes('w-full mb-2')
+
+        # 将输入字段存储到字典中以便访问
+        gas_inputs = {
+            '气体名称': gas_name_input,
+            '毒性等级': toxicity_input,
+            'IDLH浓度': idlh_input,
+            'MAC浓度': mac_input,
+            '安全阈值': safe_threshold_input,
+            '警戒浓度': warning_concentration_input,
+            '危险浓度': danger_concentration_input
+        }
+
+        # 添加保存按钮（如果需要保存修改）
+        # ui.button('保存修改', on_click=lambda: save_gas_changes(gas_inputs)).classes('w-full mt-4')
+
+    def update_gas_inputs():
+        """当气体选择改变时，填充所有输入字段"""
+        selected_gas_name = gas_select.value
+        if not selected_gas_name:
+            # 清空所有输入字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+            return
+
+        # 查找选中的气体信息
+        gas_info = next(
+            (e for e in gases if e['气体名称'] == selected_gas_name), None)
+
+        if gas_info:
+            # 将所有值转换为字符串并填充到输入字段中
+            gas_inputs['气体名称'].value = str(gas_info.get('气体名称', ''))
+            gas_inputs['毒性等级'].value = str(gas_info.get('毒性等级', ''))
+            gas_inputs['IDLH浓度'].value = str(gas_info.get('IDLH浓度', ''))
+            gas_inputs['MAC浓度'].value = str(gas_info.get('MAC浓度', ''))
+            gas_inputs['安全阈值'].value = str(gas_info.get('安全阈值', ''))
+            gas_inputs['警戒浓度'].value = str(gas_info.get('警戒浓度', ''))
+            gas_inputs['危险浓度'].value = str(gas_info.get('危险浓度', ''))
+
+            # 可选：根据字段类型设置输入类型
+            set_input_attributes(gas_info)
+        else:
+            # 如果找不到气体，清空所有字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+
+    def set_input_attributes(gas_info):
+        """根据数据类型设置输入属性"""
+        # 对于数值字段，可以设置输入类型
+        concentration_fields = ['IDLH浓度', 'MAC浓度', '安全阈值', '警戒浓度', '危险浓度']
+
+        for field in concentration_fields:
+            value = gas_info.get(field)
+            input_field = gas_inputs[field]
+
+            if isinstance(value, (int, float)):
+                # 设置为数字输入
+                input_field.props('type=number step=any')
+                # 可选：添加单位后缀
+                if field in ['IDLH浓度', 'MAC浓度', '警戒浓度', '危险浓度']:
+                    input_field.props(f'suffix=ppm')
+            else:
+                input_field.props('')
+
+    # 连接选择器变化事件
+    gas_select.on('update:model-value', update_gas_inputs)
+
+    # 初始填充（只在页面加载时执行一次）
+    if gases:
+        update_gas_inputs()
+
+    with map_card:
+        # 嵌入iframe来显示地图页面
+        iframe = ui.html(f'''
+<div id='mapdiv'>
+    <iframe
+        id="map-iframe"
+        src="/room"
+        style="width: 800px; height: 800px; border: none;"
+        title="地图"
+    ></iframe>
+</div>
+''', sanitize=False)
+
+    # return for simulation_page_fds()
+    return
+
+# ---------------------------------------------------------------------------
+
+
 @ui.page('/simulation')
 @with_layout_full_width
 async def simulation_page():
-    with ui.row().classes('w-[1200px] justify-center gap-4'):
+    with ui.row().classes('w-[1200px] justify-center flex items-end'):
         simulate_button = ui.button(
-            'Start Simulation', icon='play_arrow').props('color=primary')
+            '开始 hysplit 模拟', icon='play_arrow').props('color=primary')
 
         simulation_history_select = ui.select(
-            options=[], label='Simulation History').classes('w-64')
+            options=[], label='载入历史模拟').classes('w-64')
 
     # Layout
     with ui.row().classes('w-full justify-center gap-4'):

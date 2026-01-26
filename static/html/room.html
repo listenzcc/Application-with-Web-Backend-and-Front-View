@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Guides</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #room {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 800px;
+            height: 800px;
+            z-index: 10;
+            overflow: clip;
+        }
+
+        .click-through {
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div>
+        <div id="room"></div>
+        <div id="overlap" class="click-through" style="z-index:100; position: fixed">
+        </div>
+        <div id="simulation" class="click-through" style="z-index:200; position: fixed">
+        </div>
+    </div>
+    <div style="z-index: 200; position: absolute">
+        <!-- Options for session frames -->
+        <div>
+            <select id="sliceSelection">
+            </select>
+        </div>
+    </div>
+
+    <!-- functions -->
+    <script>
+        // drawRoom
+        function drawRoom() {
+            const canvas = document.getElementById('roomCanvas'),
+                ctx = canvas.getContext('2d'),
+                { width, height } = canvas;
+
+            console.log(canvas, ctx, width, height)
+
+            ctx.fillStyle = '#f0f0f0'
+            ctx.rect(0, 0, width, height)
+            ctx.fill()
+        }
+
+        // drawSensors
+        function drawSensors() {
+
+        }
+
+        /**
+         * 独立函数：从指定API获取传感器数据并绘制到指定canvas上
+         * @param {string} apiUrl - 传感器数据API地址
+         * @param {HTMLCanvasElement} canvas - 要绘制的canvas元素
+         * @param {Object} customStyles - 自定义样式（可选）
+         * @returns {Promise<Array>} 返回传感器数据数组
+         */
+        async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
+            // 验证参数
+            if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
+                throw new Error('有效的canvas元素是必需的');
+            }
+
+            try {
+                // 1. 获取传感器数据
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+
+                const sensors = await response.json();
+
+                // 2. 获取canvas上下文
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    throw new Error('无法获取canvas上下文');
+                }
+
+                // 3. 合并默认样式和自定义样式
+                const defaultStyles = {
+                    humidity: {
+                        color: 'rgba(65, 105, 225, 0.8)',
+                        radius: 8,
+                        borderColor: 'rgba(30, 144, 255, 1)',
+                        labelColor: 'black'
+                    },
+                    temp: {
+                        color: 'rgba(220, 20, 60, 0.8)',
+                        radius: 10,
+                        borderColor: 'rgba(255, 69, 0, 1)',
+                        labelColor: 'black'
+                    },
+                    default: {
+                        color: 'rgba(50, 205, 50, 0.8)',
+                        radius: 8,
+                        borderColor: 'rgba(34, 139, 34, 1)',
+                        labelColor: 'black'
+                    },
+                    fontSize: 12,
+                    fontFamily: 'Arial'
+                };
+
+                const styles = { ...defaultStyles, ...customStyles };
+
+                // 4. 清除canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 5. 绘制每个传感器
+                sensors.forEach(sensor => {
+                    const sensorId = sensor.sensor_id.toLowerCase();
+                    let type = 'default';
+
+                    if (sensorId.includes('humidity')) {
+                        type = 'humidity';
+                    } else if (sensorId.includes('temp')) {
+                        type = 'temp';
+                    }
+
+                    const style = styles[type] || styles.default;
+                    drawSensor(ctx, canvas.width * sensor.x_position, canvas.height * sensor.y_position, sensor, style, styles.fontSize, styles.fontFamily)
+                });
+
+                // 6. 返回传感器数据供进一步使用
+                return sensors;
+
+            } catch (error) {
+                console.error('绘制传感器数据失败:', error);
+                throw error;
+            }
+        }
+
+        /**
+         * 绘制单个传感器点的具体实现
+         */
+        function drawSensor(ctx, x, y, sensor, style, fontSize, fontFamily) {
+            // 绘制外圆边框
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius + 2, 0, Math.PI * 2);
+            ctx.fillStyle = style.borderColor;
+            ctx.fill();
+
+            // 绘制内圆主体
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius, 0, Math.PI * 2);
+            ctx.fillStyle = style.color;
+            ctx.fill();
+
+            // 绘制中心点
+            ctx.beginPath();
+            ctx.arc(x, y, style.radius / 3, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+
+            // 绘制传感器ID
+            ctx.fillStyle = style.labelColor;
+            ctx.font = `bold ${fontSize}px ${fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+
+            // 添加文字阴影
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+
+            ctx.fillText(sensor.sensor_id, x, y + style.radius + 8);
+
+            // 可选：绘制最后更新时间
+            if (sensor.last_updated) {
+                const timeText = new Date(sensor.last_updated).toLocaleTimeString();
+                ctx.font = `10px ${fontFamily}`;
+                ctx.fillText(timeText, x, y + style.radius + 25);
+            }
+
+            if (sensor.value) {
+                const value = sensor.value.toFixed(4);
+                ctx.font = `10px ${fontFamily}`;
+                ctx.fillText(value, x, y + style.radius + 40);
+            }
+        }
+
+
+    </script>
+
+    <!-- Draw the room -->
+    <script>
+        {
+            const canvas = document.createElement('canvas');
+            canvas.id = 'roomCanvas'
+            room.appendChild(canvas)
+
+            const canvasOverlap = document.createElement('canvas');
+            canvasOverlap.id = 'overlayCanvas'
+            overlap.appendChild(canvasOverlap)
+
+            function resizeCanvas() {
+                canvas.width = room.offsetWidth
+                canvas.height = room.offsetHeight
+                canvasOverlap.width = room.offsetWidth
+                canvasOverlap.height = room.offsetHeight
+                drawRoom();
+
+                // 初始绘制
+                drawSensorsOnCanvas(
+                    'latest_sensor_data',
+                    canvasOverlap
+                ).then(sensors => {
+                    console.log(`绘制了 ${sensors.length} 个传感器`);
+                });
+            }
+            resizeCanvas();
+
+            // 定时更新
+            setInterval(() => {
+                drawSensorsOnCanvas(
+                    'latest_sensor_data',
+                    canvasOverlap
+                ).then(sensors => {
+                    // console.log(`更新了 ${sensors.length} 个传感器`);
+                });
+            }, 5000); // 每5秒更新一次
+        }
+    </script>
+
+</body>
+
+</html>

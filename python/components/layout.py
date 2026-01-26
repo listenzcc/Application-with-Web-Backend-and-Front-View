@@ -90,7 +90,9 @@ def create_header():
                 with ui.row().classes('gap-6'):
                     ui.link('介绍页', '/',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
-                    ui.link('扩散仿真', '/simulation',
+                    ui.link('扩散仿真(hysplit)', '/simulation',
+                            ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
+                    ui.link('扩散仿真(FDS)', '/simulationFDS',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('仿真案例', '/caseBrowser',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
