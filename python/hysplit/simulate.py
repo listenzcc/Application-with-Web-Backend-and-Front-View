@@ -2,6 +2,7 @@
 import time
 import uuid
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from .mk_control import mk_control, mk_emitimes
@@ -11,7 +12,11 @@ from .mk_images import collect_and_generate_images
 
 
 def simulate_with_hysplit(sensors):
-    session = str(uuid.uuid4())
+    now = datetime.now()
+    ns = now.strftime('%Y-%m-%d-%H-%M-%S')
+
+    session = '-'.join([ns, str(uuid.uuid4())])
+
     dir = 'hysplit'
     dst = Path(dir, 'simulation', session)
     dst.mkdir(exist_ok=True, parents=True)

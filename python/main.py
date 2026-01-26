@@ -1648,6 +1648,11 @@ async def simulation_page():
         simulation_history_select = ui.select(
             options=[], label='载入历史模拟').classes('w-64')
 
+        simulation_spinner = ui.spinner(size='2em')
+
+    simulation_spinner.set_visibility(False)
+    simulation_spinner.update()
+
     # Layout
     with ui.row().classes('w-full justify-center gap-4'):
         weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
@@ -1660,10 +1665,13 @@ async def simulation_page():
         update_map(session=session)
 
     # simulation_history = get_fds_simulation_result_history()
-    simulation_history = get_hysplit_simulation_result_history()
-    print(simulation_history)
-    simulation_history_select.options = [e for e in simulation_history]
-    simulation_history_select.update()
+    def update_simulation_history():
+        simulation_history = get_hysplit_simulation_result_history()
+        print(simulation_history)
+        simulation_history_select.options = [e for e in simulation_history]
+        simulation_history_select.update()
+
+    update_simulation_history()
     simulation_history_select.on_value_change(on_select_session)
 
     # Simulate button action
@@ -1676,10 +1684,15 @@ async def simulation_page():
             except:
                 pass
         # session = simulate_with_fds(sensors)
+        simulation_spinner.set_visibility(True)
+        simulation_spinner.update()
         session = simulate_with_hysplit(sensors)
         update_map(session=session)
+        update_simulation_history()
+        simulation_spinner.set_visibility(False)
+        simulation_spinner.update()
         ui.notify(
-            f'Simulation started. Session ID: {session}', color='positive')
+            f'Simulation finished. Session ID: {session}', color='positive')
 
     simulate_button.on('click', on_click)
 
