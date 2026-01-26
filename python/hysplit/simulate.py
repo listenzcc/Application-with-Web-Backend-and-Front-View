@@ -111,7 +111,6 @@ def prepare_files(dst: Path, points: list, simulation_date: dict):
         day=day,
         start_hour=start_hour,
         duration_hours=duration_hours,
-        meteorology_dir="D:/WeatherData/",
         output_dir="./",
         output_file="cdump"
     )

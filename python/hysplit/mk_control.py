@@ -1,5 +1,12 @@
+from omegaconf.omegaconf import OmegaConf
 from pathlib import Path
 from datetime import datetime
+
+# Load simulation.yml for hysplit setup
+conf = OmegaConf.load('./conf/simulation.yml')
+print(conf)
+
+weather_data_folder = conf['hysplit']['weatherData']
 
 
 def mk_emitimes(points: list, year: int, month: int, day: int, hour: int, minute: int, duration_hours: int, duration_minutes: int):
@@ -32,7 +39,7 @@ def mk_emitimes(points: list, year: int, month: int, day: int, hour: int, minute
 
 
 def mk_control(points: list, year: int, month: int, day: int,
-               meteorology_dir: str = "D:/WeatherData/",
+               meteorology_dir: str = weather_data_folder,  # "E:/WeatherData/",
                meteorology_files: list = None,
                start_hour: int = 0,
                duration_hours: int = -6,
@@ -184,7 +191,8 @@ def mk_control(points: list, year: int, month: int, day: int,
 
 def generate_meteorology_files_for_period(start_datetime: datetime,
                                           duration_hours: int,
-                                          base_dir: str = "D:/WeatherData/"):
+                                          base_dir: str = weather_data_folder  # "E:/WeatherData/"
+                                          ):
     """
     根据模拟时段自动生成所需的气象文件列表
 
@@ -278,7 +286,6 @@ if __name__ == "__main__":
         day=2,      # 2日
         start_hour=0,
         duration_hours=24,  # 24小时后向轨迹
-        meteorology_dir="D:/WeatherData/",
         output_dir="./output/",
         output_file="trajectory_20240502"
     )
@@ -299,7 +306,6 @@ if __name__ == "__main__":
     meteorology_files = generate_meteorology_files_for_period(
         start_datetime=start_dt,
         duration_hours=-72,  # 3天后向轨迹
-        base_dir="D:/WeatherData/"
     )
 
     print(f"所需气象文件: {len(meteorology_files)} 个")
