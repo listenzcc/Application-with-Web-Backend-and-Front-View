@@ -31,7 +31,7 @@ from explorer.toxic_gas import ToxicGasDatabase
 from components.layout import with_layout, with_layout_full_width
 
 from fds.simulate import simulate_with_fds, get_fds_simulation_result_history
-from hysplit.simulate import simulate_with_hysplit, get_hysplit_simulation_result_history
+from hysplit.simulate import simulate_with_hysplit, get_hysplit_simulation_result_history, mk_hysplit_session
 
 # %%
 PROJECT = OmegaConf.load('conf/project.yml')
@@ -1399,8 +1399,17 @@ def require_json_latest_sensor_data():
 async def get_fds_simulation_result(session: str):
     dir = 'fds'
     session_dir = Path(dir) / 'simulation' / session
+
+    if not session_dir.is_dir():
+        return HTMLResponse(json.dumps([]), media_type='application/json')
+
     files = list(session_dir.iterdir()) if session_dir.is_dir() else []
-    files.extend(list((session_dir / 'img').iterdir()))
+
+    img_dir = session_dir / 'img'
+
+    if img_dir.is_dir():
+        files.extend(list(img_dir.iterdir()))
+
     obj = {'files': [str(f.name) for f in files]}
     return HTMLResponse(json.dumps(obj), media_type='application/json')
 
@@ -1421,8 +1430,16 @@ async def get_fds_simulation_frame(session: str, frame: str):
 async def get_hysplit_simulation_result(session: str):
     dir = 'hysplit'
     session_dir = Path(dir) / 'simulation' / session
+
+    if not session_dir.is_dir():
+        return HTMLResponse(json.dumps([]), media_type='application/json')
+
     files = list(session_dir.iterdir()) if session_dir.is_dir() else []
-    files.extend(list((session_dir / 'img').iterdir()))
+
+    img_dir = session_dir / 'img'
+    if img_dir.is_dir():
+        files.extend(list(img_dir.iterdir()))
+
     obj = {'files': [str(f.name) for f in files]}
     return HTMLResponse(json.dumps(obj), media_type='application/json')
 
@@ -1430,18 +1447,21 @@ async def get_hysplit_simulation_result(session: str):
 @ui.page('/get_hysplit_simulation_frame')
 async def get_hysplit_simulation_frame(session: str, frame: str):
     dir = 'hysplit'
-    session_dir = Path(dir) / 'simulation' / session / 'img' / frame
-    if not session_dir.is_file():
+    p = Path(dir) / 'simulation' / session / 'img' / frame
+    if not p.is_file():
         return HTMLResponse('File not found', status_code=404)
-    # print(session_dir)
-    return FileResponse(session_dir, media_type='image/png')
+    return FileResponse(p, media_type='image/png')
 
 
 @ui.page('/get_hysplit_simulation_table_json')
 async def get_hysplit_simulation_table_json(session: str):
     dir = 'hysplit'
-    obj = json.load(open(Path(dir) / 'simulation' /
-                    session / 'table.json'))
+    p = Path(dir) / 'simulation' / session / 'table.json'
+
+    if not p.is_file():
+        return HTMLResponse(json.dumps({}), media_type='application/json')
+
+    obj = json.load(open(p))
     return HTMLResponse(json.dumps(obj), media_type='application/json')
 
 # ---------------------------------------------------------------------------
@@ -1488,6 +1508,22 @@ async def simulation_page_fds():
 
     update_simulation_history()
     simulation_history_select.on_value_change(on_select_session)
+
+    def on_click():
+        reader = SensorDataReader()
+        sensors = reader.get_sensor_info()
+        for s in sensors:
+            try:
+                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+            except:
+                pass
+        session = simulate_with_fds(sensors)
+        update_room(session=session)
+        # update_simulation_history()
+        ui.notify(
+            f'Simulation finished. Session ID: {session}', color='positive')
+
+    simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
     geo_candidates = {
@@ -1664,20 +1700,15 @@ async def simulation_page_fds():
 # ---------------------------------------------------------------------------
 
 
-@ui.page('/simulation')
+@ui.page('/simulationHysplit')
 @with_layout_full_width
-async def simulation_page():
+async def simulation_page_hysplit():
     with ui.row().classes('w-[1200px] justify-center flex items-end'):
         simulate_button = ui.button(
             '开始 hysplit 模拟', icon='play_arrow').props('color=primary')
 
         simulation_history_select = ui.select(
             options=[], label='载入历史模拟').classes('w-64')
-
-        simulation_spinner = ui.spinner(size='2em')
-
-    simulation_spinner.set_visibility(False)
-    simulation_spinner.update()
 
     # Layout
     with ui.row().classes('w-full justify-center gap-4'):
@@ -1709,14 +1740,12 @@ async def simulation_page():
                 s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
             except:
                 pass
-        # session = simulate_with_fds(sensors)
-        simulation_spinner.set_visibility(True)
-        simulation_spinner.update()
-        session = simulate_with_hysplit(sensors)
+
+        session = mk_hysplit_session()
+        simulate_with_hysplit(sensors, session)
         update_map(session=session)
         update_simulation_history()
-        simulation_spinner.set_visibility(False)
-        simulation_spinner.update()
+
         ui.notify(
             f'Simulation finished. Session ID: {session}', color='positive')
 

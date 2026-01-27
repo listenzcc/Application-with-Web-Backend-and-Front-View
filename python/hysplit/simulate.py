@@ -2,6 +2,7 @@
 import time
 import uuid
 import subprocess
+import multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 
@@ -11,12 +12,25 @@ from .mk_images import collect_and_generate_images
 # %%
 
 
-def simulate_with_hysplit(sensors):
+def mk_hysplit_session():
     now = datetime.now()
     ns = now.strftime('%Y-%m-%d-%H-%M-%S')
-
     session = '-'.join([ns, str(uuid.uuid4())])
+    return session
 
+
+def simulate_with_hysplit(sensors, session):
+    dir = 'hysplit'
+    dst = Path(dir, 'simulation', session)
+    dst.mkdir(exist_ok=True, parents=True)
+    p = mp.Process(target=_simulate_with_hysplit,
+                   kwargs=dict(sensors=sensors, session=session),
+                   daemon=False)
+    p.start()
+    return session
+
+
+def _simulate_with_hysplit(sensors, session):
     dir = 'hysplit'
     dst = Path(dir, 'simulation', session)
     dst.mkdir(exist_ok=True, parents=True)

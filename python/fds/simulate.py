@@ -21,6 +21,8 @@ Functions:
 import json
 import uuid
 import subprocess
+
+from datetime import datetime
 from pathlib import Path
 
 # %% ---- 2025-12-27 ------------------------
@@ -35,7 +37,11 @@ def simulate_with_fds(sensors):
     '''
     dir = 'fds'
     script = 'runme.ps1'
-    session = str(uuid.uuid4())
+
+    now = datetime.now()
+    ns = now.strftime('%Y-%m-%d-%H-%M-%S')
+    session = '-'.join([ns, str(uuid.uuid4())])
+
     fds_file = Path(dir) / f'simulation_{session}.fds'
     sensors_file = Path(dir) / f'sensors_{session}.json'
     fds_template_setup = open(Path(dir) / 'template.fds').read()

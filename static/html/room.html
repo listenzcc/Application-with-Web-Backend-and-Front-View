@@ -25,6 +25,24 @@
         .click-through {
             pointer-events: none;
         }
+
+        #runningDiv {
+            font-size: small;
+            color: brown;
+            display: block;
+        }
+
+        #frameSelectionSpan {
+            font-size: small;
+            color: white;
+            background-color: #0003;
+        }
+
+        ol {
+            max-height: 400px;
+            overflow-y: scroll;
+            overflow-x: clip;
+        }
     </style>
 </head>
 
@@ -38,9 +56,13 @@
     </div>
     <div style="z-index: 200; position: absolute">
         <!-- Options for session frames -->
-        <div>
-            <select id="frameSelection">
-            </select>
+        <span id="frameSelectionSpan" style="position: fixed; right: 0"></span>
+        <select id="frameSelection" style="display:none">
+        </select>
+        <div id="runningDiv">
+            <span id="runningDivSpan"></span>
+            <ol id="runningDivOl">
+            </ol>
         </div>
     </div>
 
@@ -77,10 +99,6 @@
             ctx.fill()
         }
 
-        // drawSensors
-        function drawSensors() {
-
-        }
 
         /**
          * 独立函数：从指定API获取传感器数据并绘制到指定canvas上
@@ -226,6 +244,16 @@
 
                 const resp = await response.json();
                 console.log(resp)
+
+                // Update runningDivOl
+                runningDivOl.innerHTML = ''
+                resp.files.map(f => {
+                    let li = document.createElement('li')
+                    li.innerText = f
+                    runningDivOl.appendChild(li)
+                })
+                runningDivSpan.innerHTML = "模拟正在进行，请稍候 (session={{session}})"
+
                 // 如果生成结果中不包含 'generated.gif'，则继续定时检查
                 if (!resp.files.includes('generated.gif')) {
                     setTimeout(timelyCheck, 1000);
@@ -239,6 +267,11 @@
                             frameSelection.appendChild(option);
                         }
                     });
+
+                    // Update running div and frameSelection stuff
+                    runningDiv.style.display = 'none';
+                    frameSelection.style.display = 'block';
+                    frameSelectionSpan.innerHTML = '{{session}}';
 
                     // 绘制模拟结果
                     drawSimulationFrame()
