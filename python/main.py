@@ -1400,8 +1400,8 @@ async def get_fds_simulation_result(session: str):
     dir = 'fds'
     session_dir = Path(dir) / 'simulation' / session
 
-    if not session_dir.is_dir():
-        return HTMLResponse(json.dumps([]), media_type='application/json')
+    # if not session_dir.is_dir():
+    #     return HTMLResponse(json.dumps([]), media_type='application/json')
 
     files = list(session_dir.iterdir()) if session_dir.is_dir() else []
 

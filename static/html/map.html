@@ -246,12 +246,14 @@
 
                         // 生成网格
                         featureCollection.features.forEach(f => console.log(f.geometry.type));
+                        /*
                         const grid = turf.interpolate(featureCollection, 0.1, {
                             gridType: 'points',
                             property: 'value',
                             units: 'degrees'
                         });
                         console.log(grid)
+                        */
 
                         // 移除旧图层
                         if (map.getLayer('heatmap-layer')) {
