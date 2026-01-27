@@ -1463,6 +1463,32 @@ async def simulation_page_fds():
         map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
         gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
 
+    def update_room(session='???'):
+        # 构建包含参数的 URL
+        params = f'session={session}'
+        # 更新 iframe 的 src 属性
+        js_code = f"""
+        var iframe = document.getElementById('map-iframe');
+        if (iframe) {{
+            iframe.src = '/room?{params}';
+        }}
+        """
+        ui.run_javascript(js_code)
+        print(f'Update the room with {session=}')
+
+    def on_select_session(e):
+        session = e.value
+        update_room(session=session)
+
+    def update_simulation_history():
+        simulation_history = get_fds_simulation_result_history()
+        print(simulation_history)
+        simulation_history_select.options = [e for e in simulation_history]
+        simulation_history_select.update()
+
+    update_simulation_history()
+    simulation_history_select.on_value_change(on_select_session)
+
     gases = gas_db.search_gases()
     geo_candidates = {
         '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},

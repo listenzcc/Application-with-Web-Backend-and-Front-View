@@ -65,6 +65,9 @@
         const sessionStr = "{{session}}";
         const sessionApiUrl = `/get_hysplit_simulation_result/${sessionStr}`;
         const geoLimitsUrl = `/get_hysplit_simulation_table_json/?session=${sessionStr}`;
+        const sessionFrameApiUrl = (frame) => {
+            return `/get_hysplit_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
+        }
 
         /**
          * 定时检查模拟结果是否生成完成
@@ -319,7 +322,7 @@
                     })
                 }
 
-                const url = `/get_hysplit_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
+                const url = sessionFrameApiUrl(frame)
                 const image = new Image();
                 image.src = url;
                 image.onload = () => {
