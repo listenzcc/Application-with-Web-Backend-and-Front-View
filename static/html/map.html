@@ -11,6 +11,7 @@
     <!-- <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.js"></script> -->
     <link href="/static/src/mapbox-gl.css" rel="stylesheet">
     <script src="/static/src/mapbox-gl.js"></script>
+    <script src="/static/secret/config.js"></script>
 
     <!-- 加载整个 Turf.js 库 -->
     <!-- <script src='https://unpkg.com/@turf/turf@7/turf.min.js'></script> -->
@@ -137,10 +138,12 @@
     </script>
 
     <script>
-        mapboxgl.accessToken = 'pk.eyJ1IjoibGlzdGVuemNjIiwiYSI6ImNrMzU5MmpxZDAxMXEzbXQ0dnd4YTZ2NDAifQ.GohcgYXFsbDqfsi_7SXdpA';
+        mapboxgl.accessToken = MAPBOX_CONFIG.accessToken;
         const map = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/standard',
+            // style: 'mapbox://styles/mapbox/standard',
+            // Use my own mapbox key
+            style: MAPBOX_CONFIG.styleId,
             projection: 'globe',
             zoom: "{{zoom}}",
             // center: [116.3912757, 39.906217] // 经度，纬度
