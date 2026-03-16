@@ -1029,7 +1029,7 @@ async def case_browser_page():
 
         with file_tree_container:
             # 显示案例路径
-            with ui.row().classes('items-center mb-3 p-2 bg-blue-50 rounded'):
+            with ui.row().classes('items-center mb-3 p-2 border-b border-black border-solid'):
                 ui.icon('folder_open').classes('text-blue-600 mr-2')
                 ui.label(f"案例目录: {case_path}").classes('text-sm')
 
@@ -1038,6 +1038,7 @@ async def case_browser_page():
 
     def build_file_tree(path: Path, level=0):
         """递归构建文件树"""
+        print(f'Building file tree: {path=}')
         # 获取所有条目并排序：先文件夹后文件
         items = []
         for item in sorted(path.iterdir()):
@@ -1045,6 +1046,13 @@ async def case_browser_page():
                 items.append((item, True))  # True 表示是文件夹
             else:
                 items.append((item, False))  # False 表示是文件
+
+        cover_container = ui.row().classes(
+            f'items-center ml-{level*4} w-full p-1 rounded')
+        abstract_container = ui.row().classes(
+            f'items-center ml-{level*4} w-full p-1 rounded')
+        cover_container_is_used = False
+        abstract_container_is_used = False
 
         if path.parent != CASE_FOLDER:
             with ui.row().classes(f'items-center ml-{level*4} w-full hover:bg-gray-100 p-1 rounded'):
@@ -1059,62 +1067,91 @@ async def case_browser_page():
                 )
 
         # 先处理文件夹
-        for item, is_dir in items:
-            if is_dir:
-                with ui.row().classes(f'items-center ml-{level*4} w-full hover:bg-gray-100 p-1 rounded'):
-                    # 展开/收起按钮
-                    expand_btn = ui.button(icon='chevron_right',
-                                           on_click=lambda p=item: toggle_folder(p)).props('flat dense size=sm')
+        for item in [e for e, b in items if b]:
+            with ui.row().classes(f'items-center ml-{level*4} w-full hover:bg-gray-100 p-1 rounded'):
+                # 展开/收起按钮
+                expand_btn = ui.button(icon='chevron_right',
+                                       on_click=lambda p=item: toggle_folder(p)).props('flat dense size=sm')
 
-                    # 文件夹图标和名称
-                    ui.icon(DEFAULT_FOLDER_ICON).classes('text-amber-600 mr-2')
-                    ui.label(item.name).classes('flex-grow cursor-pointer').on(
-                        'click', lambda p=item: load_case_files(
-                            p.name) if p.parent == CASE_FOLDER else None
-                    )
+                # 文件夹图标和名称
+                ui.icon(DEFAULT_FOLDER_ICON).classes('text-amber-600 mr-2')
+                ui.label(item.name).classes('flex-grow cursor-pointer').on(
+                    'click', lambda p=item: load_case_files(
+                        p.name) if p.parent == CASE_FOLDER else None
+                )
 
-                    # 子文件计数
-                    file_count = len(
-                        [f for f in item.rglob('*') if f.is_file()])
-                    if file_count > 0:
-                        ui.badge(str(file_count)).props('color=blue')
+                # 子文件计数
+                file_count = len(
+                    [f for f in item.rglob('*') if f.is_file()])
+                if file_count > 0:
+                    ui.badge(str(file_count)).props('color=blue')
 
-                    # 子容器（初始隐藏）
-                    sub_container = ui.column().classes(
-                        f'w-full ml-{(level+1)*4} hidden')
+                # 子容器（初始隐藏）
+                sub_container = ui.column().classes(
+                    f'w-full ml-{(level+1)*4} hidden')
 
-                    # 存储引用
-                    expand_btn.sub_container = sub_container
-                    expand_btn.folder_path = item
+                # 存储引用
+                expand_btn.sub_container = sub_container
+                expand_btn.folder_path = item
 
         # 再处理文件
-        for item, is_dir in items:
-            if not is_dir:
-                suffix = item.suffix.lower()
-                icon = FILE_ICONS.get(suffix, DEFAULT_FILE_ICON)
+        for item in [e for e, b in items if not b]:
+            # Make sure the cover image is loaded exactly one time
+            if item.stem == 'cover' and not cover_container_is_used:
+                print(f'Found cover image: {item=}')
+                with cover_container:
+                    img = ui.image(item.as_posix()).classes('max-w-[80%]')
+                    cover_container_is_used = True
 
-                with ui.row().classes(f'items-center ml-{level*4} w-full hover:bg-gray-50 p-1 rounded'):
-                    ui.icon(icon).classes('text-gray-600 mr-2')
-                    ui.label(item.name).classes('flex-grow cursor-pointer').on(
-                        'click', lambda f=item: preview_file(f)
-                    )
+                    def _on_error():
+                        cover_container.clear()
+                        cover_container_is_used = False
+                    img.on('error', _on_error)
+                continue
 
-                    # 文件大小
-                    size = item.stat().st_size
-                    size_str = f"{size:,} B"
-                    if size > 1024*1024:
-                        size_str = f"{size/(1024*1024):.1f} MB"
-                    elif size > 1024:
-                        size_str = f"{size/1024:.1f} KB"
+            if item.name == 'abstract.txt':
+                print(f'Found abstract: {item=}')
+                with abstract_container:
+                    try:
+                        content = open(item, encoding='utf-8').read()
+                    except Exception as err:
+                        content = f'Error: {err}'
+                    ui.label(content).classes('max-w-full')
+                abstract_container_is_used = True
+                continue
 
-                    ui.label(size_str).classes('text-xs text-gray-500 mr-2')
+            suffix = item.suffix.lower()
+            icon = FILE_ICONS.get(suffix, DEFAULT_FILE_ICON)
 
-                    # 操作按钮
-                    with ui.row().classes('gap-1'):
-                        ui.button(icon='visibility',
-                                  on_click=lambda f=item: preview_file(f)).props('flat dense size=sm')
-                        ui.button(icon='download',
-                                  on_click=lambda f=item: download_file(f)).props('flat dense size=sm')
+            with ui.row().classes(f'items-center ml-{level*4} w-full p-1 rounded hover:border-l'):
+                ui.icon(icon).classes('text-gray-600 mr-2')
+                ui.label(item.name).classes('flex-grow cursor-pointer').on(
+                    'click', lambda f=item: preview_file(f)
+                )
+
+                # 文件大小
+                size = item.stat().st_size
+                size_str = f"{size:,} B"
+                if size > 1024*1024:
+                    size_str = f"{size/(1024*1024):.1f} MB"
+                elif size > 1024:
+                    size_str = f"{size/1024:.1f} KB"
+
+                ui.label(size_str).classes('text-xs text-gray-500 mr-2')
+
+                # 操作按钮
+                with ui.row().classes('gap-1'):
+                    ui.button(icon='visibility',
+                              on_click=lambda f=item: preview_file(f)).props('flat dense size=sm')
+                    ui.button(icon='download',
+                              on_click=lambda f=item: download_file(f)).props('flat dense size=sm')
+
+        # Make them invisible if the containers are not used.
+        if not abstract_container_is_used:
+            abstract_container.set_visibility(False)
+
+        if not cover_container_is_used:
+            cover_container.set_visibility(False)
 
     def toggle_folder(folder_path: Path):
         """切换文件夹展开/收起状态"""
