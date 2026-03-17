@@ -1031,7 +1031,7 @@ async def case_browser_page():
             # 显示案例路径
             with ui.row().classes('items-center mb-3 p-2 border-b border-black border-solid'):
                 ui.icon('folder_open').classes('text-blue-600 mr-2')
-                ui.label(f"案例目录: {case_path}").classes('text-sm')
+                ui.label(f"案例目录: {case_path}").classes('text-md font-bold')
 
             # 构建文件树
             build_file_tree(case_path)
@@ -1047,10 +1047,14 @@ async def case_browser_page():
             else:
                 items.append((item, False))  # False 表示是文件
 
+        # cover_container = ui.row().classes(
+        #     f'items-center ml-{level*4} w-full p-1 rounded overflow-visible'
+        # )
         cover_container = ui.row().classes(
-            f'items-center ml-{level*4} w-full p-1 rounded')
+            f'flex items-center justify-center ml-{level*4} w-full p-1 rounded overflow-visible')
         abstract_container = ui.row().classes(
             f'items-center ml-{level*4} w-full p-1 rounded')
+        abstract_container_spacer = ui.separator()
         cover_container_is_used = False
         abstract_container_is_used = False
 
@@ -1097,15 +1101,19 @@ async def case_browser_page():
         # 再处理文件
         for item in [e for e, b in items if not b]:
             # Make sure the cover image is loaded exactly one time
+            # ! Also require the cover image is of 16:9 ratio.
             if item.stem == 'cover' and not cover_container_is_used:
                 print(f'Found cover image: {item=}')
                 with cover_container:
-                    img = ui.image(item.as_posix()).classes('max-w-[80%]')
+                    img = ui.image(item.as_posix()).classes(
+                        'max-w-[640px] h-[360px]'
+                    ).style('aspect-ratio: 16/9;')
                     cover_container_is_used = True
 
                     def _on_error():
                         cover_container.clear()
                         cover_container_is_used = False
+                        print('error')
                     img.on('error', _on_error)
                 continue
 
