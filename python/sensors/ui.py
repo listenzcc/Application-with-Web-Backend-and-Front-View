@@ -102,7 +102,7 @@ class SensorsUI:
                 ''')
 
             # 右侧 - 传感器详情和图表
-            with ui.row().classes('w-full pl-6 border-l'):
+            with ui.row().classes('w-full pl-0'):
 
                 # 详情卡片
                 with ui.card().classes('w-1/3 mb-6'):
@@ -184,6 +184,10 @@ class SensorsUI:
                     elif time_diff > timedelta(minutes=1):
                         status = '延迟'
                         color = 'orange'
+                else:
+                    # The sensor has never been mentioned
+                    status = '离线'
+                    color = 'red'
 
                 rows.append({
                     'sensor_id': sensor_id,
