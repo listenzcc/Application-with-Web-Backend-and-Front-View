@@ -1051,7 +1051,7 @@ async def case_browser_page():
         #     f'items-center ml-{level*4} w-full p-1 rounded overflow-visible'
         # )
         cover_container = ui.row().classes(
-            f'flex items-center justify-center ml-{level*4} w-full p-1 rounded overflow-visible')
+            f'flex items-center justify-center ml-{level*4} w-full p-1 rounded overflow-visible relative')
         abstract_container = ui.row().classes(
             f'items-center ml-{level*4} w-full p-1 rounded')
         abstract_container_spacer = ui.separator()
@@ -1105,9 +1105,15 @@ async def case_browser_page():
             if item.stem == 'cover' and not cover_container_is_used:
                 print(f'Found cover image: {item=}')
                 with cover_container:
+                    # img = ui.image(item.as_posix()).classes(
+                    #     'max-w-[640px] h-[360px]'
+                    # ).style('aspect-ratio: 16/9;')
+
                     img = ui.image(item.as_posix()).classes(
-                        'max-w-[640px] h-[360px]'
-                    ).style('aspect-ratio: 16/9;')
+                        'w-full max-h-[600px]')
+                    abstract_label = ui.label('Your Watermark Text Here').classes(
+                        'absolute bottom-2 left-0 right-0 text-white text-center text-lg font-medium p-2 bg-black/50 rounded mx-2')
+
                     cover_container_is_used = True
 
                     def _on_error():
@@ -1119,12 +1125,12 @@ async def case_browser_page():
 
             if item.name == 'abstract.txt':
                 print(f'Found abstract: {item=}')
+                try:
+                    abstract_content = open(item, encoding='utf-8').read()
+                except Exception as err:
+                    abstract_content = f'Abstract N.A.'
                 with abstract_container:
-                    try:
-                        content = open(item, encoding='utf-8').read()
-                    except Exception as err:
-                        content = f'Error: {err}'
-                    ui.label(content).classes('max-w-full')
+                    ui.label(abstract_content).classes('max-w-full')
                 abstract_container_is_used = True
                 continue
 
@@ -1154,6 +1160,9 @@ async def case_browser_page():
                     ui.button(icon='download',
                               on_click=lambda f=item: download_file(f)).props('flat dense size=sm')
 
+        if abstract_container_is_used and cover_container_is_used:
+            abstract_label.set_text(abstract_content)
+
         # Make them invisible if the containers are not used.
         if not abstract_container_is_used:
             abstract_container.set_visibility(False)
@@ -1182,6 +1191,10 @@ async def case_browser_page():
             if suffix in ['.gif', '.jpg', '.jpeg', '.png']:
                 with ui.row().classes('w-full h-96 overflow-auto border rounded'):
                     ui.image(str(file_path)).classes('max-w-full')
+
+            if suffix in ['.mp4']:
+                with ui.row().classes('w-full h-96 overflow-auto border rounded'):
+                    ui.video(str(file_path)).classes('max-w-full')
 
             elif suffix == '.pdf':
                 ui.html(f'''
@@ -1517,7 +1530,7 @@ async def get_hysplit_simulation_table_json(session: str):
 async def simulation_page_fds():
     with ui.row().classes('w-[1200px] justify-center flex items-end'):
         simulate_button = ui.button(
-            '开始 FDS 模拟', icon='play_arrow').props('color=primary')
+            '开始 CFD 模型计算', icon='play_arrow').props('color=primary')
 
         simulation_history_select = ui.select(
             options=[], label='载入历史模拟').classes('w-64')
@@ -1527,6 +1540,7 @@ async def simulation_page_fds():
         weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
         map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
         gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        template_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
 
     def update_room(session='???'):
         # 构建包含参数的 URL
@@ -1671,6 +1685,14 @@ async def simulation_page_fds():
         # 添加保存按钮（如果需要保存修改）
         # ui.button('保存修改', on_click=lambda: save_gas_changes(gas_inputs)).classes('w-full mt-4')
 
+    with template_card:
+        ui.label('气体扩散模板').classes('text-h6 mb-4')
+        template_select = ui.select(
+            options=['默认模板1', '默认模板2', '自定义模板'],
+            value='默认模板1',
+            label='选择模板'
+        ).classes('w-full')
+
     def update_gas_inputs():
         """当气体选择改变时，填充所有输入字段"""
         selected_gas_name = gas_select.value
@@ -1750,7 +1772,7 @@ async def simulation_page_fds():
 async def simulation_page_hysplit():
     with ui.row().classes('w-[1200px] justify-center flex items-end'):
         simulate_button = ui.button(
-            '开始 hysplit 模拟', icon='play_arrow').props('color=primary')
+            '开始拉格朗日模型计算', icon='play_arrow').props('color=primary')
 
         simulation_history_select = ui.select(
             options=[], label='载入历史模拟').classes('w-64')

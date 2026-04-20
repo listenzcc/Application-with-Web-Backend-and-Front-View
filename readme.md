@@ -12,24 +12,12 @@ And the front end can be either web browser or other similar applications.
 
 Documents: [PlantUML](https://plantuml.com/guide)
 
-## Security Protocols
+## Dev diary
 
-### Authentication
+- 20260323
+  - Resize the case image to full-width.
+  - Place the abstract on the bottom of the case image.
 
-### HTTPs
-
-## UI design
-
-### Function
-
-### Tabs
-
-### Color theme
-
-## Customization
-
-### New data
-
-### Local geometry
-
-### Customize style
+- 20260324
+  - Add new cases 案例一、二、三.
+  - Add supports for case video.

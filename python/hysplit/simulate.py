@@ -38,6 +38,9 @@ def _simulate_with_hysplit(sensors, session):
     lat1, lat2 = 30, 33
     lon1, lon2 = 110, 121
 
+    lat1, lat2 = 30, 31
+    lon1, lon2 = 110, 111
+
     points = [{
         'height': 10,
         'mass': 100 * s.get('value', 0),

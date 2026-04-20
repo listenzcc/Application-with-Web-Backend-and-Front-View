@@ -167,41 +167,42 @@ class SensorsUI:
 
             # 准备表格数据
             rows = []
-            for sensor in sensors:
-                sensor_id = sensor['sensor_id']
-                latest = latest_dict.get(sensor_id, {})
+            for _ in range(1):
+                for sensor in sensors:
+                    sensor_id = sensor['sensor_id']
+                    latest = latest_dict.get(sensor_id, {})
 
-                # 判断传感器状态（基于最后更新时间）
-                status = '在线'
-                color = 'green'
-                if 'timestamp' in latest:
-                    last_update = datetime.fromisoformat(
-                        latest['timestamp'].replace('Z', '+00:00'))
-                    time_diff = datetime.now() - last_update
-                    if time_diff > timedelta(minutes=5):
+                    # 判断传感器状态（基于最后更新时间）
+                    status = '在线'
+                    color = 'green'
+                    if 'timestamp' in latest:
+                        last_update = datetime.fromisoformat(
+                            latest['timestamp'].replace('Z', '+00:00'))
+                        time_diff = datetime.now() - last_update
+                        if time_diff > timedelta(minutes=5):
+                            status = '离线'
+                            color = 'red'
+                        elif time_diff > timedelta(minutes=1):
+                            status = '延迟'
+                            color = 'orange'
+                    else:
+                        # The sensor has never been mentioned
                         status = '离线'
                         color = 'red'
-                    elif time_diff > timedelta(minutes=1):
-                        status = '延迟'
-                        color = 'orange'
-                else:
-                    # The sensor has never been mentioned
-                    status = '离线'
-                    color = 'red'
 
-                rows.append({
-                    'sensor_id': sensor_id,
-                    'value': f"{latest.get('value', 'N/A'):.2f}" if 'value' in latest else 'N/A',
-                    'position': f"({sensor['x_position']:.1f}, {sensor['y_position']:.1f})",
-                    'timestamp': latest.get('timestamp', 'N/A'),
-                    'status': status,
-                    '_status_color': color,
-                    'actions': '--',
-                    '_raw_data': {
-                        'sensor': sensor,
-                        'latest': latest
-                    }
-                })
+                    rows.append({
+                        'sensor_id': sensor_id,
+                        'value': f"{latest.get('value', 'N/A'):.2f}" if 'value' in latest else 'N/A',
+                        'position': f"({sensor['x_position']:.1f}, {sensor['y_position']:.1f})",
+                        'timestamp': latest.get('timestamp', 'N/A'),
+                        'status': status,
+                        '_status_color': color,
+                        'actions': '--',
+                        '_raw_data': {
+                            'sensor': sensor,
+                            'latest': latest
+                        }
+                    })
 
             return rows
 
