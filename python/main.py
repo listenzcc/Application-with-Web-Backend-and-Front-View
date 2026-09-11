@@ -27,6 +27,7 @@ from sensors.sensor_writer import SensorDataWriter
 from util.user_session_manager import UserSessionManager
 
 from explorer.toxic_gas import ToxicGasDatabase
+from explorer.chemical import ChemicalDatabase
 
 from components.layout import with_layout, with_layout_full_width
 
@@ -46,6 +47,7 @@ app.add_static_files('/static', 'static')  # URL path, local folder %%
 # %%
 # Gas explorer data
 gas_db = ToxicGasDatabase()
+chem_db = ChemicalDatabase()
 
 # %%
 # Cases
@@ -94,19 +96,6 @@ except:
 unrestricted_page_routes = {'/login', '/welcome', '/'}
 session_manager = UserSessionManager()
 
-
-# @app.add_middleware
-# class AuthMiddleware(BaseHTTPMiddleware):
-#     """This middleware restricts access to all NiceGUI pages.
-
-#     It redirects the user to the login page if they are not authenticated.
-#     """
-
-#     async def dispatch(self, request: Request, call_next):
-#         if not app.storage.user.get('authenticated', False):
-#             if not request.url.path.startswith('/_nicegui') and request.url.path not in unrestricted_page_routes:
-#                 return RedirectResponse(f'/login?redirect_to={request.url.path}')
-#         return await call_next(request)
 
 @app.add_middleware
 class EnhancedAuthMiddleware(BaseHTTPMiddleware):
@@ -446,6 +435,11 @@ class GasManagementUI:
         #     'text-caption')
 
 
+class ChemicalMagementUI:
+    def __init__(self):
+        pass
+
+
 @contextlib.contextmanager
 def make_it_center():
     with ui.column().classes('absolute-center items-center') as col:
@@ -685,6 +679,32 @@ async def gas_explorer_page():
                 'NIST Chemistry WebBook': 'https://webbook.nist.gov/chemistry/',
                 'GESTIS-Database': 'https://www.dguv.de/ifa/gestis/gestis-stoffdatenbank/index-2.jsp',
                 'EPA CompTox': 'https://comptox.epa.gov/dashboard/'
+            }
+
+            with ui.row().classes('gap-4'):
+                for name, url in websites.items():
+                    with ui.link(target=url, new_tab=True):
+                        ui.button(name, icon='open_in_new').props('flat')
+
+    return
+
+
+@ui.page('/chemicalExplorer')
+@with_layout
+async def chemical_explorer_page():
+    with ui.card().classes('w-full shadow-lg rounded-lg').style('background:#fafafaa0'):
+
+        _ui = ChemicalMagementUI()
+
+        # 分割线
+        ui.separator().classes('my-4')
+
+        # 网站链接部分
+        with ui.card_section():
+            ui.label('化学知识学习材料').classes('text-h6 font-semibold mb-3')
+
+            websites = {
+                'web': 'https://.../',
             }
 
             with ui.row().classes('gap-4'):

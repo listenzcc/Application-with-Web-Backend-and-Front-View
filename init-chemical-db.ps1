@@ -1,0 +1,1 @@
+python ./python/init_chemical_db.py
