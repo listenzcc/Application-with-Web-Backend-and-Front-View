@@ -3,213 +3,566 @@
 
 <head>
     <meta charset="utf-8">
-    <title>Guides</title>
+    <title>FDS 模拟环境</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
 
     <style>
+        html,
         body {
             margin: 0;
             padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, "Microsoft YaHei", Arial, sans-serif;
         }
 
-        #room {
+        #stage {
             position: absolute;
             top: 0;
+            left: 0;
+            right: 0;
             bottom: 0;
-            width: 800px;
-            height: 800px;
-            z-index: 10;
-            overflow: clip;
+            background: #f0f0f0;
+        }
+
+        #stage canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
         }
 
         .click-through {
             pointer-events: none;
         }
 
-        #runningDiv {
-            font-size: small;
-            color: brown;
-            display: block;
+        #hud {
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            z-index: 500;
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #222;
         }
 
-        #frameSelectionSpan {
-            font-size: small;
-            color: white;
-            background-color: #0003;
+        #hudRow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
         }
 
-        ol {
-            max-height: 400px;
-            overflow-y: scroll;
-            overflow-x: clip;
+        #frameRange {
+            flex: 1 1 200px;
+            min-width: 140px;
+        }
+
+        .btn {
+            border: 1px solid #bbb;
+            background: #fafafa;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn:hover {
+            background: #f0f0f0;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: #eee;
+            color: #333;
+        }
+
+        .tag.success {
+            background: #e6f4ea;
+            color: #1b5e20;
+        }
+
+        .tag.failed {
+            background: #fdecea;
+            color: #b71c1c;
+        }
+
+        .tag.pending {
+            background: #fff8e1;
+            color: #8d6e00;
+        }
+
+        #statusLine {
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        #metaLine {
+            color: #555;
+            margin-bottom: 6px;
+        }
+
+        #frameLabel {
+            font-variant-numeric: tabular-nums;
+            min-width: 130px;
+            display: inline-block;
+        }
+
+        #runningBox {
+            max-height: 120px;
+            overflow: auto;
+            border-top: 1px dashed #ddd;
+            margin-top: 6px;
+            padding-top: 4px;
+            color: #666;
+        }
+
+        #runningBox ol {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        #templateBox {
+            display: none;
+            max-height: 220px;
+            overflow: auto;
+            margin-top: 6px;
+            background: #1e1e1e;
+            color: #d8d8d8;
+            border-radius: 4px;
+            padding: 6px;
+            white-space: pre;
+            font-family: Consolas, monospace;
+            font-size: 11px;
+        }
+
+        .swatch {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            vertical-align: -1px;
+            margin-right: 3px;
+        }
+
+        label.chk {
+            cursor: pointer;
+            user-select: none;
         }
     </style>
 </head>
 
 <body>
-    <div>
-        <div id="room"></div>
-        <div id="overlap" class="click-through" style="z-index:100; position: fixed">
-        </div>
-        <div id="simulation" class="click-through" style="z-index:200; position: fixed">
-        </div>
-    </div>
-    <div style="z-index: 200; position: absolute">
-        <!-- Options for session frames -->
-        <span id="frameSelectionSpan" style="position: fixed; right: 0"></span>
-        <select id="frameSelection" style="display:none">
-        </select>
-        <div id="runningDiv">
-            <span id="runningDivSpan"></span>
-            <ol id="runningDivOl">
-            </ol>
+    <div id="stage">
+        <canvas id="roomCanvas"></canvas>
+        <canvas id="environmentCanvas"></canvas>
+        <canvas id="simulationCanvas"></canvas>
+        <canvas id="devicesCanvas"></canvas>
+        <canvas id="sensorsCanvas"></canvas>
+
+        <div id="hud">
+            <div id="statusLine">
+                <span id="sessionTag" class="tag">会话</span>
+                <span id="statusTag" class="tag">—</span>
+                <span id="frameLabel">— / —</span>
+            </div>
+            <div id="metaLine">—</div>
+            <div id="hudRow">
+                <button id="playBtn" class="btn" title="播放 / 暂停">▶ 播放</button>
+                <input id="frameRange" type="range" min="0" max="0" step="1" value="0">
+                <label class="chk"><input id="flipYChk" type="checkbox"> Y 轴翻转</label>
+                <label class="chk"><input id="envChk" type="checkbox" checked> 环境</label>
+                <label class="chk"><input id="devcChk" type="checkbox" checked> 检测点</label>
+                <label class="chk"><input id="sensorChk" type="checkbox" checked> 传感器</label>
+                <button id="templateBtn" class="btn">查看 template.fds</button>
+            </div>
+            <div id="legendLine" style="margin-top:6px;color:#555">
+                <span class="swatch" style="background:#ff0000"></span>高浓度
+                <span class="swatch" style="background:#ff9999"></span>低浓度
+                <span class="swatch" style="background:#ffffff;border:1px solid #ccc"></span>透明=无气体
+                <span id="scaleText"></span>
+            </div>
+            <div id="runningBox" style="display:none">
+                <div><span id="runningDivSpan"></span></div>
+                <ol id="runningDivOl"></ol>
+            </div>
+            <pre id="templateBox"></pre>
         </div>
     </div>
 
     <!-- Urls -->
     <script>
         const sessionStr = "{{session}}";
-        const sessionApiUrl = `/get_fds_simulation_result/${sessionStr}`;
-        const sessionFrameApiUrl = (frame) => {
-            return `/get_fds_simulation_frame?session=${sessionStr}&frame=${frame}`;
-        }
-
+        const resultApiUrl = `/get_fds_simulation_result/${encodeURIComponent(sessionStr)}`;
+        const frameApiUrl = (frame) =>
+            `/get_fds_simulation_frame?session=${encodeURIComponent(sessionStr)}&frame=${encodeURIComponent(frame)}`;
+        const sensorApiUrl = '/latest_sensor_data';
     </script>
 
-    <!-- functions -->
+    <!-- 状态 -->
     <script>
-        // drawRoom
-        function drawRoom(canvas) {
-            const ctx = canvas.getContext('2d'),
-                { width, height } = canvas;
+        const state = {
+            session: sessionStr,
+            result: null,
+            env: null,
+            frames: [],
+            index: 0,
+            playing: false,
+            timer: null,
+            flipY: false,
+            showEnv: true,
+            showDevc: true,
+            showSensors: true,
+            frameCache: new Map(),
+        };
 
-            console.log(canvas, ctx, width, height)
+        const $ = (id) => document.getElementById(id);
+        const canvases = {
+            room: $('roomCanvas'),
+            env: $('environmentCanvas'),
+            sim: $('simulationCanvas'),
+            devc: $('devicesCanvas'),
+            sensors: $('sensorsCanvas'),
+        };
+    </script>
 
-            // Draw the background image of the room
-            {
-                const image = new Image();
-                image.src = '/static/img/room.webp'
-                image.onload = () => {
-                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
-                }
-            }
+    <!-- 基础绘制 -->
+    <script>
+        function W() { return canvases.room.width; }
+        function H() { return canvases.room.height; }
 
-            ctx.fillStyle = '#f0f0f0'
-            ctx.rect(0, 0, width, height)
-            ctx.fill()
+        function drawRoomBackground() {
+            const ctx = canvases.room.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, W(), H());
+
+            const image = new Image();
+            image.src = '/static/img/room.webp';
+            image.onload = () => {
+                ctx.globalAlpha = 1;
+                ctx.drawImage(image, 0, 0, W(), H());
+            };
         }
 
+        /**
+         * 物理坐标 -> 画布坐标。
+         * 气体切片图是按整个计算域铺满画布的，所以环境图层也用同一套映射，
+         * 两者才能严丝合缝地叠在一起。
+         */
+        function makeProjector(domain) {
+            const [x0, x1, y0, y1] = domain;
+            const dx = (x1 - x0) || 1;
+            const dy = (y1 - y0) || 1;
+            return {
+                x: (x) => (x - x0) / dx * W(),
+                y: (y) => state.flipY
+                    ? (1 - (y - y0) / dy) * H()
+                    : (y - y0) / dy * H(),
+            };
+        }
+
+        const VENT_STYLE = {
+            'OPEN': { color: '#c62828', dash: [6, 4], width: 3, label: '开口' },
+            'SUPPLY': { color: '#2e7d32', dash: [], width: 3, label: '送风' },
+        };
+
+        function ventStyle(surfId) {
+            const key = String(surfId || '').toUpperCase();
+            if (key === 'OPEN') return VENT_STYLE.OPEN;
+            if (key === 'SUPPLY') return VENT_STYLE.SUPPLY;
+            if (key.includes('WALL')) return { color: '#455a64', dash: [], width: 4, label: '壁面' };
+            return { color: '#ef6c00', dash: [3, 3], width: 3, label: '泄漏面' };
+        }
 
         /**
-         * 独立函数：从指定API获取传感器数据并绘制到指定canvas上
-         * @param {string} apiUrl - 传感器数据API地址
-         * @param {HTMLCanvasElement} canvas - 要绘制的canvas元素
-         * @param {Object} customStyles - 自定义样式（可选）
-         * @returns {Promise<Array>} 返回传感器数据数组
+         * 画环境：计算域、障碍物矩形、通风口/开口、切片高度。
          */
-        async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
-            // 验证参数
-            if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
-                throw new Error('有效的canvas元素是必需的');
+        function drawEnvironment() {
+            const ctx = canvases.env.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+
+            const env = state.env;
+            if (!state.showEnv || !env || !env.domain) return;
+
+            const P = makeProjector(env.domain);
+            const [x0, x1, y0, y1, z0, z1] = env.domain;
+            const sliceZ = pickSliceZ(env);
+
+            // --- 计算域 ---
+            ctx.save();
+            ctx.strokeStyle = 'rgba(30,30,30,.55)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([8, 5]);
+            ctx.strokeRect(P.x(x0), P.y(y0), P.x(x1) - P.x(x0), P.y(y1) - P.y(y0));
+            ctx.restore();
+
+            // --- 障碍物 ---
+            (env.obst || []).forEach((o) => {
+                const b = o.xb;
+                const left = P.x(b[0]);
+                const right = P.x(b[1]);
+                const top = Math.min(P.y(b[2]), P.y(b[3]));
+                const bottom = Math.max(P.y(b[2]), P.y(b[3]));
+                const w = Math.max(right - left, 1);
+                const h = Math.max(bottom - top, 1);
+                const onSlice = b[4] <= sliceZ && sliceZ <= b[5];
+
+                ctx.save();
+                ctx.fillStyle = onSlice ? 'rgba(96,125,139,.45)' : 'rgba(96,125,139,.18)';
+                ctx.strokeStyle = onSlice ? '#37474f' : 'rgba(69,90,100,.55)';
+                ctx.lineWidth = onSlice ? 2 : 1;
+                ctx.setLineDash(onSlice ? [] : [4, 4]);
+                ctx.fillRect(left, top, w, h);
+                ctx.strokeRect(left, top, w, h);
+
+                if (o.id) {
+                    ctx.setLineDash([]);
+                    ctx.font = '11px "Microsoft YaHei", sans-serif';
+                    ctx.fillStyle = '#263238';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(String(o.id), left + 2, top + 2);
+                }
+                ctx.restore();
+            });
+
+            // --- 通风口 / 开口 ---
+            (env.vents || []).forEach((v) => {
+                const b = v.xb;
+                const dx = b[1] - b[0];
+                const dy = b[3] - b[2];
+                const dz = b[5] - b[4];
+                // 只画竖直平面（x 或 y 为常数）；水平面（地板/天花板）俯视图里没有意义
+                if (dx > 1e-6 && dy > 1e-6) return;
+
+                const st = ventStyle(v.surf_id);
+                ctx.save();
+                ctx.strokeStyle = st.color;
+                ctx.lineWidth = st.width;
+                ctx.setLineDash(st.dash);
+                ctx.beginPath();
+                if (dx <= 1e-6) {
+                    const x = P.x(b[0]);
+                    const y1c = P.y(b[2]);
+                    const y2c = P.y(b[3]);
+                    ctx.moveTo(x, y1c);
+                    ctx.lineTo(x, y2c);
+                } else {
+                    const y = P.y(b[2]);
+                    const x1c = P.x(b[0]);
+                    const x2c = P.x(b[1]);
+                    ctx.moveTo(x1c, y);
+                    ctx.lineTo(x2c, y);
+                }
+                ctx.stroke();
+                ctx.restore();
+            });
+
+            // --- 切片高度标注 ---
+            ctx.save();
+            ctx.font = '11px "Microsoft YaHei", sans-serif';
+            ctx.fillStyle = 'rgba(30,30,30,.7)';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(
+                `切片 z = ${sliceZ} m   域 ${x1 - x0}×${y1 - y0}×${z1 - z0} m   网格 ${(env.mesh && env.mesh.ijk ? env.mesh.ijk.join('×') : '—')}`,
+                W() - 6, H() - 6);
+            ctx.restore();
+        }
+
+        function pickSliceZ(env) {
+            const slices = env.slices || [];
+            for (const s of slices) {
+                if (s.pbz !== null && s.pbz !== undefined) return s.pbz;
             }
+            const z = env.domain ? env.domain[4] : 0;
+            return z + 1.5;
+        }
+
+        /**
+         * 画检测点（DEVC）：十字 + 圆圈 + 当前读数。
+         */
+        function drawDevices() {
+            const ctx = canvases.devc.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+
+            const env = state.env;
+            if (!state.showDevc || !env || !env.domain) return;
+
+            const P = makeProjector(env.domain);
+            const readout = deviceReadoutAt(state.index);
+
+            (env.devices || []).forEach((d) => {
+                const x = P.x(d.xyz[0]);
+                const y = P.y(d.xyz[1]);
+                const v = readout[d.id];
+                const hot = typeof v === 'number' && v > 0;
+
+                ctx.save();
+                ctx.strokeStyle = hot ? '#b71c1c' : '#1a237e';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x, y, 7, 0, Math.PI * 2);
+                ctx.moveTo(x - 11, y);
+                ctx.lineTo(x + 11, y);
+                ctx.moveTo(x, y - 11);
+                ctx.lineTo(x, y + 11);
+                ctx.stroke();
+
+                ctx.font = 'bold 11px "Microsoft YaHei", sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'bottom';
+                ctx.fillStyle = '#1a237e';
+                let text = String(d.id || 'DEVC');
+                if (typeof v === 'number') {
+                    text += ` = ${formatValue(v)}`;
+                }
+                ctx.fillText(text, x + 12, y - 4);
+                ctx.restore();
+            });
+        }
+
+        function formatValue(v) {
+            if (!isFinite(v)) return String(v);
+            if (v === 0) return '0';
+            if (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5) return v.toExponential(2);
+            return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+        }
+
+        /**
+         * 当前帧对应的各检测点读数。按时间最近匹配，帧与 devc 行数不一致时也不会错。
+         */
+        function deviceReadoutAt(frameIndex) {
+            const out = {};
+            const devc = state.result && state.result.devc;
+            const frame = state.frames[frameIndex];
+            if (!devc || !devc.times || !devc.times.length || !frame) return out;
+
+            let best = 0;
+            if (typeof frame.time === 'number') {
+                let bestDiff = Infinity;
+                devc.times.forEach((t, i) => {
+                    const diff = Math.abs(t - frame.time);
+                    if (diff < bestDiff) { bestDiff = diff; best = i; }
+                });
+            } else {
+                best = Math.min(frameIndex, devc.times.length - 1);
+            }
+
+            (devc.names || []).forEach((name) => {
+                const series = devc.values[name];
+                if (series && series.length > best) out[name] = series[best];
+            });
+            return out;
+        }
+    </script>
+
+    <!-- 气体图层 -->
+    <script>
+        async function frameImage(file) {
+            if (state.frameCache.has(file)) return state.frameCache.get(file);
+
+            const img = new Image();
+            img.src = frameApiUrl(file);
+            await img.decode();
+
+            const off = document.createElement('canvas');
+            off.width = img.naturalWidth;
+            off.height = img.naturalHeight;
+            const octx = off.getContext('2d');
+            octx.drawImage(img, 0, 0);
+
+            const imageData = octx.getImageData(0, 0, off.width, off.height);
+            const d = imageData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                const gray = (d[i] + d[i + 1] + d[i + 2]) / 3;
+                if (gray === 0) {
+                    d[i + 3] = 0;                 // 没有气体 -> 完全透明
+                } else {
+                    d[i] = gray;                  // 灰阶映射到红色
+                    d[i + 1] = Math.floor(gray * 0.1);
+                    d[i + 2] = Math.floor(gray * 0.1);
+                    d[i + 3] = gray;              // 浓度越高越不透明
+                }
+            }
+            octx.putImageData(imageData, 0, 0);
+            state.frameCache.set(file, off);
+            return off;
+        }
+
+        async function drawSimulationFrame() {
+            const ctx = canvases.sim.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+
+            const frame = state.frames[state.index];
+            if (!frame) return;
 
             try {
-                // 1. 获取传感器数据
-                const response = await fetch(apiUrl);
-                if (!response.ok) {
-                    throw new Error(`HTTP错误: ${response.status}`);
-                }
-
-                const sensors = await response.json();
-
-                // 2. 获取canvas上下文
-                const ctx = canvas.getContext('2d');
-                if (!ctx) {
-                    throw new Error('无法获取canvas上下文');
-                }
-
-                // 3. 合并默认样式和自定义样式
-                const defaultStyles = {
-                    humidity: {
-                        color: 'rgba(65, 105, 225, 0.8)',
-                        radius: 8,
-                        borderColor: 'rgba(30, 144, 255, 1)',
-                        labelColor: 'black'
-                    },
-                    temp: {
-                        color: 'rgba(220, 20, 60, 0.8)',
-                        radius: 10,
-                        borderColor: 'rgba(255, 69, 0, 1)',
-                        labelColor: 'black'
-                    },
-                    default: {
-                        color: 'rgba(50, 205, 50, 0.8)',
-                        radius: 8,
-                        borderColor: 'rgba(34, 139, 34, 1)',
-                        labelColor: 'black'
-                    },
-                    fontSize: 12,
-                    fontFamily: 'Arial'
-                };
-
-                const styles = { ...defaultStyles, ...customStyles };
-
-                // 4. 清除canvas
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 5. 绘制每个传感器
-                sensors.forEach(sensor => {
-                    const sensorId = sensor.sensor_id.toLowerCase();
-                    let type = 'default';
-
-                    if (sensorId.includes('humidity')) {
-                        type = 'humidity';
-                    } else if (sensorId.includes('temp')) {
-                        type = 'temp';
-                    }
-
-                    const style = styles[type] || styles.default;
-                    drawSensor(ctx, canvas.width * sensor.x_position, canvas.height * sensor.y_position, sensor, style, styles.fontSize, styles.fontFamily)
-                });
-
-                // 6. 返回传感器数据供进一步使用
-                return sensors;
-
-            } catch (error) {
-                console.error('绘制传感器数据失败:', error);
-                throw error;
+                const off = await frameImage(frame.file);
+                ctx.clearRect(0, 0, W(), H());
+                ctx.drawImage(off, 0, 0, W(), H());
+            } catch (err) {
+                console.error('气体帧加载失败', frame, err);
             }
         }
+    </script>
 
-        /**
-         * 绘制单个传感器点的具体实现
-         */
+    <!-- 传感器图层 -->
+    <script>
+        const SENSOR_STYLES = {
+            humidity: {
+                color: 'rgba(65, 105, 225, 0.8)',
+                radius: 8,
+                borderColor: 'rgba(30, 144, 255, 1)',
+                labelColor: 'black'
+            },
+            temp: {
+                color: 'rgba(220, 20, 60, 0.8)',
+                radius: 10,
+                borderColor: 'rgba(255, 69, 0, 1)',
+                labelColor: 'black'
+            },
+            default: {
+                color: 'rgba(50, 205, 50, 0.8)',
+                radius: 8,
+                borderColor: 'rgba(34, 139, 34, 1)',
+                labelColor: 'black'
+            },
+            fontSize: 12,
+            fontFamily: 'Arial'
+        };
+
         function drawSensor(ctx, x, y, sensor, style, fontSize, fontFamily) {
-            // 绘制外圆边框
             ctx.beginPath();
             ctx.arc(x, y, style.radius + 2, 0, Math.PI * 2);
             ctx.fillStyle = style.borderColor;
             ctx.fill();
 
-            // 绘制内圆主体
             ctx.beginPath();
             ctx.arc(x, y, style.radius, 0, Math.PI * 2);
             ctx.fillStyle = style.color;
             ctx.fill();
 
-            // 绘制中心点
             ctx.beginPath();
             ctx.arc(x, y, style.radius / 3, 0, Math.PI * 2);
             ctx.fillStyle = 'white';
             ctx.fill();
 
-            // 绘制传感器ID
             ctx.fillStyle = style.labelColor;
             ctx.font = `bold ${fontSize}px ${fontFamily}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
 
-            // 添加文字阴影
             ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
             ctx.shadowBlur = 2;
             ctx.shadowOffsetX = 1;
@@ -217,188 +570,237 @@
 
             ctx.fillText(sensor.sensor_id, x, y + style.radius + 8);
 
-            // 可选：绘制最后更新时间
-            if (sensor.last_updated) {
-                const timeText = new Date(sensor.last_updated).toLocaleTimeString();
+            if (sensor.value !== undefined && sensor.value !== null) {
                 ctx.font = `10px ${fontFamily}`;
-                ctx.fillText(timeText, x, y + style.radius + 25);
+                ctx.fillText(Number(sensor.value).toFixed(4), x, y + style.radius + 24);
             }
-
-            if (sensor.value) {
-                const value = sensor.value.toFixed(4);
-                ctx.font = `10px ${fontFamily}`;
-                ctx.fillText(value, x, y + style.radius + 40);
-            }
+            ctx.shadowBlur = 0;
         }
 
+        async function drawSensorsOnCanvas() {
+            const canvas = canvases.sensors;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+            if (!state.showSensors) return;
 
-        /**
-         * 定时检查模拟结果是否生成完成
-         */
-        function timelyCheck() {
-            const response = fetch(sessionApiUrl);
-            response.then(async (response) => {
-                if (!response.ok) {
-                    throw new Error(`HTTP错误: ${response.status}`);
-                }
+            try {
+                const response = await fetch(sensorApiUrl);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const sensors = await response.json();
 
-                const resp = await response.json();
-                console.log(resp)
-
-                // Update runningDivOl
-                runningDivOl.innerHTML = ''
-                resp.files.map(f => {
-                    let li = document.createElement('li')
-                    li.innerText = f
-                    runningDivOl.appendChild(li)
-                })
-                runningDivSpan.innerHTML = "模拟正在进行，请稍候 (session={{session}})"
-
-                // 如果生成结果中不包含 'generated.gif'，则继续定时检查
-                if (!resp.files.includes('generated.gif')) {
-                    setTimeout(timelyCheck, 1000);
-                } else {
-                    // 结果生成完成，填充下拉选项
-                    resp.files.forEach(file => {
-                        if (file.endsWith('.png')) {
-                            const option = document.createElement('option');
-                            option.value = file;
-                            option.text = file;
-                            frameSelection.appendChild(option);
-                        }
-                    });
-
-                    // Update running div and frameSelection stuff
-                    runningDiv.style.display = 'none';
-                    frameSelection.style.display = 'block';
-                    frameSelectionSpan.innerHTML = '{{session}}';
-
-                    // 绘制模拟结果
-                    drawSimulationFrame()
-                }
-
-            });
-        }
-
-        /**
-         * 绘制模拟结果的 frame 图层
-         */
-        function drawSimulationFrame() {
-            const frame = frameSelection.value,
-                url = sessionFrameApiUrl(frame),
-                image = new Image(),
-                canvas = document.getElementById('simulationCanvas'),
-                { width, height } = canvas,
-                ctx = canvas.getContext('2d');
-
-            console.log(frame, url)
-
-            image.src = url;
-
-            image.onload = () => {
-                ctx.drawImage(image, 0, 0, width, height)
-                console.log('Simulation image loaded and drawn on canvas, image=', image);
-                // 获取图像数据
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const data = imageData.data;
-
-                let a = 0;
-                for (let i = 0; i < data.length; i += 4) {
-                    a += data[i];
-                }
-
-                // 处理每个像素
-                for (let i = 0; i < data.length; i += 4) {
-                    const r = data[i];      // 红色通道（灰度图中三个通道值相同）
-                    const g = data[i + 1];  // 绿色通道
-                    const b = data[i + 2];  // 蓝色通道
-                    const a = data[i + 3];  // 透明度通道
-
-                    // 计算灰度值（取平均值）
-                    const gray = (r + g + b) / 3; // 255 - (r + g + b) / 3;
-
-                    if (gray === 0) {
-                        // 黑色像素：完全透明
-                        data[i + 3] = 0;
-                    } else {
-                        // 非黑色像素：使用Reds配色方案
-                        // 将灰度值映射到红色强度（0-255）
-                        // 同时保持一定透明度以保留原始灰度层次
-                        const redIntensity = Math.floor((gray / 255) * 255);
-
-                        // 设置红色通道
-                        data[i] = redIntensity;      // 红色
-                        data[i + 1] = Math.floor(redIntensity * 0.1);  // 少量绿色
-                        data[i + 2] = Math.floor(redIntensity * 0.1);  // 少量蓝色
-
-                        // 根据灰度值设置透明度（越白越不透明）
-                        data[i + 3] = Math.floor((gray / 255) * 255);
-                    }
-                }
-
-                // 将处理后的图像数据放回画布
-                ctx.putImageData(imageData, 0, 0);
-
-                console.log('Simulation image loaded and drawn with red color scheme');
+                sensors.forEach((sensor) => {
+                    const id = String(sensor.sensor_id || '').toLowerCase();
+                    let type = 'default';
+                    if (id.includes('humidity')) type = 'humidity';
+                    else if (id.includes('temp')) type = 'temp';
+                    const style = SENSOR_STYLES[type] || SENSOR_STYLES.default;
+                    drawSensor(ctx,
+                        W() * sensor.x_position,
+                        H() * sensor.y_position,
+                        sensor, style,
+                        SENSOR_STYLES.fontSize, SENSOR_STYLES.fontFamily);
+                });
+            } catch (err) {
+                console.warn('传感器数据获取失败', err);
             }
-
         }
-
     </script>
 
-    <!-- Draw the room -->
+    <!-- 状态轮询 -->
     <script>
-        {
-            // Start timely check
-            timelyCheck()
-
-            // Setup triggers
-            frameSelection.onchange = () => {
-                drawSimulationFrame()
-            }
-
-            const canvasRoom = document.createElement('canvas');
-            canvasRoom.id = 'roomCanvas'
-            room.appendChild(canvasRoom)
-
-            const canvasOverlap = document.createElement('canvas');
-            canvasOverlap.id = 'overlapCanvas'
-            overlap.appendChild(canvasOverlap)
-
-            const canvasSimulation = document.createElement('canvas');
-            canvasSimulation.id = 'simulationCanvas'
-            simulation.appendChild(canvasSimulation)
-
-            function resizeCanvas() {
-                let { offsetWidth: width, offsetHeight: height } = room;
-                Object.assign(canvasRoom, { width, height })
-                Object.assign(canvasOverlap, { width, height })
-                Object.assign(canvasSimulation, { width, height })
-
-                // 绘制房间
-                drawRoom(canvasRoom);
-
-                // 初始绘制 Sensors
-                drawSensorsOnCanvas(
-                    'latest_sensor_data',
-                    canvasOverlap
-                ).then(sensors => {
-                    console.log(`绘制了 ${sensors.length} 个传感器`);
-                });
-
-            }
-            resizeCanvas();
-
-            // 定时更新 Sensors
-            setInterval(() => {
-                drawSensorsOnCanvas(
-                    'latest_sensor_data',
-                    canvasOverlap
-                ).then(sensors => {
-                    // console.log(`更新了 ${sensors.length} 个传感器`);
-                });
-            }, 5000); // 每5秒更新一次
+        function setTag(el, text, cls) {
+            el.textContent = text;
+            el.className = 'tag' + (cls ? ' ' + cls : '');
         }
+
+        function renderHud() {
+            const res = state.result || {};
+            const hasSession = state.session && state.session !== '???';
+            setTag($('sessionTag'), hasSession ? state.session : '未选择会话');
+
+            const map = {
+                success: '计算完成',
+                failed: '计算失败',
+                pending: '计算中',
+                missing: '目录不存在',
+            };
+            setTag($('statusTag'), hasSession ? (map[res.status] || res.status || '—') : '待机',
+                hasSession ? res.status : 'pending');
+
+            const cfg = res.config || {};
+            const env = state.env || {};
+            const ijk = env.mesh && env.mesh.ijk ? env.mesh.ijk.join('×') : '—';
+            $('metaLine').textContent = hasSession ? [
+                cfg.gas_name ? `气体 ${cfg.gas_name}` : '',
+                cfg.spec_id ? `组分 ${cfg.spec_id}` : '',
+                cfg.t_end !== undefined ? `时长 ${cfg.t_end}s` : '',
+                cfg.dt !== undefined ? `间隔 ${cfg.dt}s` : '',
+                `帧数 ${state.frames.length}`,
+                `网格 ${ijk}`,
+                `检测点 ${(env.devices || []).length}`,
+                `障碍物 ${(env.obst || []).length}`,
+            ].filter(Boolean).join(' · ') : '在左侧选择或启动一次模拟';
+
+            if (res.v_max !== null && res.v_max !== undefined) {
+                $('scaleText').textContent =
+                    `   浓度映射 ${res.v_min} ~ ${res.v_max}（体积分数）`;
+            } else {
+                $('scaleText').textContent = '';
+            }
+
+            $('templateBox').textContent = res.template || '（没有读到 template.fds）';
+
+            if (res.status === 'failed' && res.note) {
+                $('metaLine').textContent += `　失败原因：${res.note}`;
+            }
+        }
+
+        function updateFrameLabel() {
+            const n = state.frames.length;
+            if (!n) {
+                $('frameLabel').textContent = '无帧';
+                return;
+            }
+            const f = state.frames[state.index];
+            const t = typeof f.time === 'number' ? f.time.toFixed(1) : '?';
+            $('frameLabel').textContent =
+                `第 ${state.index + 1} / ${n} 帧　t = ${t} s`;
+        }
+
+        async function refresh() {
+            if (!state.session || state.session === '???') {
+                renderHud();
+                updateFrameLabel();
+                return;
+            }
+
+            const response = await fetch(resultApiUrl);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const res = await response.json();
+
+            state.result = res;
+            state.env = res.environment || {};
+            state.frames = res.frames || [];
+
+            const range = $('frameRange');
+            range.max = String(Math.max(0, state.frames.length - 1));
+            if (state.index >= state.frames.length) state.index = 0;
+            range.value = String(state.index);
+
+            renderHud();
+            updateFrameLabel();
+            drawEnvironment();
+            drawDevices();
+            drawSimulationFrame();
+
+            // 计算中：把目录里已经产出的文件列出来，继续等
+            if (res.status === 'pending') {
+                const box = $('runningBox');
+                box.style.display = 'block';
+                $('runningDivSpan').textContent =
+                    `模拟正在进行，请稍候（${state.session}）`;
+                const ol = $('runningDivOl');
+                ol.innerHTML = '';
+                (res.files || []).forEach((f) => {
+                    const li = document.createElement('li');
+                    li.textContent = f;
+                    ol.appendChild(li);
+                });
+                setTimeout(refresh, 2000);
+            } else {
+                $('runningBox').style.display = 'none';
+            }
+        }
+    </script>
+
+    <!-- 交互 -->
+    <script>
+        function setIndex(i) {
+            if (!state.frames.length) return;
+            state.index = Math.max(0, Math.min(state.frames.length - 1, i));
+            $('frameRange').value = String(state.index);
+            updateFrameLabel();
+            drawSimulationFrame();
+            drawDevices();
+        }
+
+        function stopPlaying() {
+            state.playing = false;
+            if (state.timer) clearInterval(state.timer);
+            state.timer = null;
+            $('playBtn').textContent = '▶ 播放';
+        }
+
+        function togglePlaying() {
+            if (state.playing) {
+                stopPlaying();
+                return;
+            }
+            if (state.frames.length < 2) return;
+            state.playing = true;
+            $('playBtn').textContent = '⏸ 暂停';
+            state.timer = setInterval(() => {
+                const next = (state.index + 1) % state.frames.length;
+                setIndex(next);
+            }, 400);
+        }
+
+        function resize() {
+            const stage = document.getElementById('stage');
+            const w = stage.clientWidth || 800;
+            const h = stage.clientHeight || 800;
+            Object.values(canvases).forEach((c) => {
+                c.width = w;
+                c.height = h;
+            });
+            drawRoomBackground();
+            drawEnvironment();
+            drawSimulationFrame();
+            drawDevices();
+            drawSensorsOnCanvas();
+        }
+
+        window.addEventListener('resize', resize);
+
+        document.addEventListener('DOMContentLoaded', () => {
+            resize();
+            drawRoomBackground();
+
+            $('frameRange').addEventListener('input', (e) => {
+                stopPlaying();
+                setIndex(Number(e.target.value));
+            });
+            $('playBtn').addEventListener('click', togglePlaying);
+            $('flipYChk').addEventListener('change', (e) => {
+                state.flipY = e.target.checked;
+                drawEnvironment();
+                drawDevices();
+            });
+            $('envChk').addEventListener('change', (e) => {
+                state.showEnv = e.target.checked;
+                drawEnvironment();
+            });
+            $('devcChk').addEventListener('change', (e) => {
+                state.showDevc = e.target.checked;
+                drawDevices();
+            });
+            $('sensorChk').addEventListener('change', (e) => {
+                state.showSensors = e.target.checked;
+                drawSensorsOnCanvas();
+            });
+            $('templateBtn').addEventListener('click', () => {
+                const box = $('templateBox');
+                box.style.display = box.style.display === 'block' ? 'none' : 'block';
+            });
+
+            refresh().catch((err) => {
+                console.error(err);
+                setTag($('statusTag'), '读取失败', 'failed');
+                $('metaLine').textContent = String(err);
+            });
+
+            setInterval(drawSensorsOnCanvas, 5000);
+        });
     </script>
 
 </body>

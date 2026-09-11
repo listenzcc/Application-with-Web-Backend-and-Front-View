@@ -27,15 +27,14 @@ from pathlib import Path
 # %%
 FDS_DIR = Path('./fds/simulation')
 
-# %% ---- 2026-03-12 ------------------------
-# Function and class
-
+# %%
+# 一次模拟算跑完，以目录里有没有 success 标记为准（不再看 generated.gif）
 
 # %% ---- 2026-03-12 ------------------------
 # Play ground
 folders = []
 for folder in FDS_DIR.iterdir():
-    check_file = folder.joinpath('generated.gif')
+    check_file = folder.joinpath('success')
     if not folder.is_dir() or not check_file.is_file():
         continue
     folders.append(folder)
@@ -48,7 +47,7 @@ print(f'{folder=}')
 
 # Get images
 mat = np.array([np.array(Image.open(e))
-                for e in folder.joinpath('img').iterdir()])
+                for e in sorted(folder.joinpath('img').iterdir())])
 print(mat.shape)
 
 mat = np.reshape(mat, (mat.shape[0], -1))

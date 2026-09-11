@@ -5,6 +5,7 @@ received
 *.db
 *.db.*
 *.log
+.*
 
 .workbuddy
 

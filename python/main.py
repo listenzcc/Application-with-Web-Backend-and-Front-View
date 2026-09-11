@@ -31,7 +31,16 @@ from explorer.chemical import ChemicalDatabase
 
 from components.layout import with_layout, with_layout_full_width
 
-from fds.simulate import simulate_with_fds, get_fds_simulation_result_history
+from fds.simulate import (
+    simulate_with_fds,
+    get_fds_simulation_result_history,
+    get_fds_simulation_result,
+    get_fds_simulation_template,
+    list_fds_simulations,
+    simulation_dir as fds_simulation_dir,
+    SPEC_ID_OPTIONS,
+    guess_spec_id,
+)
 from hysplit.simulate import simulate_with_hysplit, get_hysplit_simulation_result_history, mk_hysplit_session
 
 # %%
@@ -1799,32 +1808,30 @@ def require_json_latest_sensor_data():
 # ---------------------------------------------------------------------------
 # fds
 @ui.page('/get_fds_simulation_result/{session}')
-async def get_fds_simulation_result(session: str):
-    dir = 'fds'
-    session_dir = Path(dir) / 'simulation' / session
-
-    # if not session_dir.is_dir():
-    #     return HTMLResponse(json.dumps([]), media_type='application/json')
-
-    files = list(session_dir.iterdir()) if session_dir.is_dir() else []
-
-    img_dir = session_dir / 'img'
-
-    if img_dir.is_dir():
-        files.extend(list(img_dir.iterdir()))
-
-    obj = {'files': [str(f.name) for f in files]}
-    return HTMLResponse(json.dumps(obj), media_type='application/json')
+async def get_fds_simulation_result_page(session: str):
+    """一次模拟的完整状态：status / frames / environment / config / devc 读数。"""
+    obj = get_fds_simulation_result(session)
+    return HTMLResponse(json.dumps(obj, ensure_ascii=False),
+                        media_type='application/json')
 
 
 @ui.page('/get_fds_simulation_frame')
 async def get_fds_simulation_frame(session: str, frame: str):
-    dir = 'fds'
-    session_dir = Path(dir) / 'simulation' / session / 'img' / frame
-    if not session_dir.is_file():
+    if any(e in frame for e in ('/', '\\', '..')):
+        return HTMLResponse('Bad request', status_code=400)
+    p = fds_simulation_dir(session) / 'img' / frame
+    if not p.is_file():
         return HTMLResponse('File not found', status_code=404)
-    print(session_dir)
-    return FileResponse(session_dir, media_type='image/png')
+    return FileResponse(p, media_type='image/png')
+
+
+@ui.page('/get_fds_simulation_template')
+async def get_fds_simulation_template_page(session: str):
+    """把该次模拟实际用的 template.fds 传回去（前端画环境图 / 查看原文）。"""
+    text = get_fds_simulation_template(session)
+    if not text:
+        return HTMLResponse('Not found', status_code=404)
+    return HTMLResponse(text, media_type='text/plain; charset=utf-8')
 
 
 # ---------------------------------------------------------------------------
@@ -1873,63 +1880,147 @@ async def get_hysplit_simulation_table_json(session: str):
 @ui.page('/simulationFDS')
 @with_layout_full_width
 async def simulation_page_fds():
-    with ui.row().classes('w-[1200px] justify-center flex items-end'):
+    """FDS 模拟页面。
+
+    一次模拟对应 fds/simulation/<session>/ 一个目录，
+    参数在这里收集，由 fds/template.fds 渲染成实际输入文件。
+    """
+    gases = gas_db.search_gases()
+
+    # 检测点 / 障碍物：数据与控件分开存，刷新行时重建控件
+    devices = [
+        {'id': 'DEVC_NEAR_LEAK', 'x': 1.3, 'y': 4.5, 'z': 1.5},
+        {'id': 'DEVC_FAR', 'x': 9.0, 'y': 9.0, 'z': 1.5},
+    ]
+    obstacles = []
+
+    device_rows = []
+    obstacle_rows = []
+
+    device_head = [('ID', 'w-52'), ('X', 'w-24'), ('Y', 'w-24'), ('Z', 'w-24')]
+    obstacle_head = [('ID', 'w-24'), ('x0', 'w-16'), ('x1', 'w-16'), ('y0', 'w-16'),
+                     ('y1', 'w-16'), ('z0', 'w-16'), ('z1', 'w-16'), ('SURF_ID', 'w-28')]
+
+    def collect_devices():
+        out = []
+        for r in device_rows:
+            try:
+                out.append({
+                    'id': (r['id'].value or '').strip() or 'DEVC',
+                    'x': float(r['x'].value or 0.0),
+                    'y': float(r['y'].value or 0.0),
+                    'z': float(r['z'].value or 0.0),
+                })
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def collect_obstacles():
+        out = []
+        for r in obstacle_rows:
+            try:
+                xb = [float(r[k].value or 0.0)
+                      for k in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1')]
+            except (TypeError, ValueError):
+                continue
+            out.append({
+                'id': (r['id'].value or '').strip() or 'OBST',
+                'xb': xb,
+                'surf_id': (r['surf'].value or 'CONVERTER_SURF').strip(),
+            })
+        return out
+
+    def add_device():
+        devices.append({'id': f'DEVC_{len(devices) + 1}', 'x': 5.0, 'y': 5.0,
+                        'z': 1.5})
+        render_devices.refresh()
+
+    def remove_device(index):
+        if 0 <= index < len(devices):
+            devices.pop(index)
+            render_devices.refresh()
+
+    def add_obstacle():
+        obstacles.append({'id': f'OBST_{len(obstacles) + 1}',
+                          'x0': 4.0, 'x1': 6.0, 'y0': 4.0, 'y1': 6.0,
+                          'z0': 0.0, 'z1': 2.0,
+                          'surf_id': 'CONVERTER_SURF'})
+        render_obstacles.refresh()
+
+    def remove_obstacle(index):
+        if 0 <= index < len(obstacles):
+            obstacles.pop(index)
+            render_obstacles.refresh()
+
+    @ui.refreshable
+    def render_devices():
+        device_rows.clear()
+        with ui.row().classes('items-center gap-1 w-full no-wrap text-xs text-gray-500'):
+            for text, cls in device_head:
+                ui.label(text).classes(cls)
+            ui.label('').classes('w-8')
+        if not devices:
+            ui.label('还没有检测点').classes('text-xs text-gray-500')
+        for index, dev in enumerate(devices):
+            with ui.row().classes('items-center gap-1 w-full no-wrap'):
+                w = {
+                    'id': ui.input(value=dev['id']).props('dense outlined placeholder=ID').classes('w-52'),
+                    'x': ui.number(value=dev['x'], step=0.1).props('dense outlined placeholder=X').classes('w-24'),
+                    'y': ui.number(value=dev['y'], step=0.1).props('dense outlined placeholder=Y').classes('w-24'),
+                    'z': ui.number(value=dev['z'], step=0.1).props('dense outlined placeholder=Z').classes('w-24'),
+                }
+                ui.button(icon='delete',
+                          on_click=lambda index=index: remove_device(index)
+                          ).props('flat dense color=negative')
+                device_rows.append(w)
+        ui.button('添加检测点', icon='add', on_click=add_device).props('flat dense')
+
+    @ui.refreshable
+    def render_obstacles():
+        obstacle_rows.clear()
+        with ui.row().classes('items-center gap-1 w-full no-wrap text-xs text-gray-500'):
+            for text, cls in obstacle_head:
+                ui.label(text).classes(cls)
+            ui.label('').classes('w-8')
+        if not obstacles:
+            ui.label('还没有障碍物矩形').classes('text-xs text-gray-500')
+        for index, obst in enumerate(obstacles):
+            with ui.row().classes('items-center gap-1 w-full no-wrap'):
+                w = {
+                    'id': ui.input(value=obst['id']).props('dense outlined placeholder=ID').classes('w-24'),
+                    'surf': ui.input(value=obst['surf_id']).props('dense outlined placeholder=SURF').classes('w-28'),
+                }
+                for key in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
+                    w[key] = ui.number(value=obst[key], step=0.1
+                                       ).props(f'dense outlined placeholder={key}').classes('w-16')
+                ui.button(icon='delete',
+                          on_click=lambda index=index: remove_obstacle(index)
+                          ).props('flat dense color=negative')
+                obstacle_rows.append(w)
+        ui.button('添加障碍物', icon='add', on_click=add_obstacle).props('flat dense')
+
+    # ---- 控制条 ----
+    with ui.row().classes('w-[1400px] justify-center items-end gap-2'):
         simulate_button = ui.button(
             '开始 CFD 模型计算', icon='play_arrow').props('color=primary')
-
         simulation_history_select = ui.select(
-            options=[], label='载入历史模拟').classes('w-64')
+            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+        refresh_history_button = ui.button('刷新历史', icon='refresh').props('flat dense')
+        status_label = ui.label('').classes('text-sm text-gray-600')
 
-    # Layout
-    with ui.row().classes('w-full justify-center gap-4'):
-        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
-        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
-        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
-        template_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+    # ---- 卡片布局 ----
+    with ui.row().classes('w-full justify-center items-start gap-4'):
+        with ui.column().classes('w-[240px] gap-2'):
+            weather_card = ui.card().classes('w-full p-4 shadow-lg')
+            mesh_card = ui.card().classes('w-full p-4 shadow-lg')
+        map_card = ui.card().classes('w-[820px] h-[820px] p-0 m-0')
+        gas_card = ui.card().classes('w-[320px] p-4 shadow-lg')
 
-    def update_room(session='???'):
-        # 构建包含参数的 URL
-        params = f'session={session}'
-        # 更新 iframe 的 src 属性
-        js_code = f"""
-        var iframe = document.getElementById('map-iframe');
-        if (iframe) {{
-            iframe.src = '/room?{params}';
-        }}
-        """
-        ui.run_javascript(js_code)
-        print(f'Update the room with {session=}')
+    with ui.row().classes('w-full justify-center items-start gap-4 mt-2'):
+        device_card = ui.card().classes('w-[700px] p-4 shadow-lg')
+        obstacle_card = ui.card().classes('w-[700px] p-4 shadow-lg')
 
-    def on_select_session(e):
-        session = e.value
-        update_room(session=session)
-
-    def update_simulation_history():
-        simulation_history = get_fds_simulation_result_history()
-        print(simulation_history)
-        simulation_history_select.options = [e for e in simulation_history]
-        simulation_history_select.update()
-
-    update_simulation_history()
-    simulation_history_select.on_value_change(on_select_session)
-
-    def on_click():
-        reader = SensorDataReader()
-        sensors = reader.get_sensor_info()
-        for s in sensors:
-            try:
-                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
-            except:
-                pass
-        session = simulate_with_fds(sensors)
-        update_room(session=session)
-        # update_simulation_history()
-        ui.notify(
-            f'Simulation finished. Session ID: {session}', color='positive')
-
-    simulate_button.on('click', on_click)
-
-    gases = gas_db.search_gases()
+    # ---- 地理 / 气象 ----
     geo_candidates = {
         '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
         '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
@@ -1938,175 +2029,205 @@ async def simulation_page_fds():
     }
     default_zoom = 4
 
-    # 左侧天气信息输入
     with weather_card:
-        ui.label('地理位置').classes('text-h6 mb-4')
-
-        # 创建下拉选择框
+        ui.label('地理位置').classes('text-h6 mb-2')
         location_select = ui.select(
             options=list(geo_candidates.keys()),
             value='北京',
-            label='选择地点'
-        ).classes('w-40')
-
-        # 创建数字输入框
+            label='选择地点').classes('w-full').props('dense outlined')
         zoom_input = ui.number(
-            value=default_zoom,
-            min=1,
-            max=20,
-            step=1,
-            precision=0,
-            label='地图缩放级别'
-        ).classes('w-24')
+            value=default_zoom, min=1, max=20, step=1, precision=0,
+            label='地图缩放级别').classes('w-full').props('dense outlined')
 
-        ui.label('气象条件').classes('text-h6 mb-4')
-
+        ui.separator().classes('my-2')
+        ui.label('气象条件').classes('text-h6 mb-2')
         weather_conditions = ui.select(
             options=['晴', '多云', '阴', '雨', '雪', '雾'],
-            value='晴',
-            label='天气状况'
-        ).classes('w-full mb-4')
-
-        temperature = ui.number(
-            label='温度(℃)',
-            value=20,
-            min=-50,
-            max=50
-        ).classes('w-full mb-4')
-
-        humidity = ui.number(
-            label='湿度(%)',
-            value=50,
-            min=0,
-            max=100
-        ).classes('w-full mb-4')
-
-        wind_speed = ui.number(
-            label='风力(级)',
-            value=3,
-            min=0,
-            max=12
-        ).classes('w-full mb-4')
-
+            value='晴', label='天气状况').classes('w-full').props('dense outlined')
+        temperature = ui.number(label='温度(℃)', value=20, min=-50, max=50
+                                ).classes('w-full').props('dense outlined')
+        humidity = ui.number(label='湿度(%)', value=50, min=0, max=100
+                             ).classes('w-full').props('dense outlined')
+        wind_speed = ui.number(label='风力(级)', value=3, min=0, max=12
+                               ).classes('w-full').props('dense outlined')
         wind_direction = ui.select(
             options=['北', '东北', '东', '东南', '南', '西南', '西', '西北'],
-            value='东',
-            label='风向'
-        ).classes('w-full')
+            value='东', label='风向').classes('w-full').props('dense outlined')
 
-    # 右侧气体信息显示
+    # ---- 计算域与网格 ----
+    with mesh_card:
+        ui.label('计算域与网格').classes('text-h6 mb-2')
+        with ui.grid(columns=3).classes('w-full gap-1'):
+            ijk_x = ui.number('IJK x', value=50, min=1, step=1, precision=0
+                              ).props('dense outlined')
+            ijk_y = ui.number('IJK y', value=50, min=1, step=1, precision=0
+                              ).props('dense outlined')
+            ijk_z = ui.number('IJK z', value=15, min=1, step=1, precision=0
+                              ).props('dense outlined')
+
+        ui.label('计算域 XB（x0, x1, y0, y1, z0, z1）').classes(
+            'text-xs text-gray-500 mt-2')
+        xb_inputs = []
+        with ui.grid(columns=3).classes('w-full gap-1'):
+            for label, value in [('x0', 0.0), ('x1', 10.0), ('y0', 0.0),
+                                 ('y1', 10.0), ('z0', 0.0), ('z1', 3.0)]:
+                xb_inputs.append(
+                    ui.number(label, value=value, step=0.5).props('dense outlined'))
+        slice_z_input = ui.number('切片高度 PBZ (m)', value=1.5, step=0.1
+                                  ).classes('w-full mt-2').props('dense outlined')
+        velocity_slice_checkbox = ui.checkbox('输出速度切片（更慢更大）', value=True
+                                              ).classes('text-xs')
+
+    # ---- 气体与组分 ----
     with gas_card:
-        ui.label('气体属性').classes('text-h6 mb-4')
-
+        ui.label('气体与组分').classes('text-h6 mb-2')
         gas_select = ui.select(
             options=[g['气体名称'] for g in gases],
             value=gases[0]['气体名称'] if gases else None,
-            label='选择气体'
-        ).classes('w-full mb-6')
+            label='气体（取自气体库）').classes('w-full').props('dense outlined')
+        gas_info_label = ui.label('').classes('text-xs text-gray-500')
 
-        # 气体属性输入字段（字符串类型）
-        gas_name_input = ui.input(label='气体名称').classes(
-            'w-full mb-2').props('readonly')
-        toxicity_input = ui.input(label='毒性等级').classes('w-full mb-2')
-        idlh_input = ui.input(label='IDLH浓度').classes('w-full mb-2')
-        mac_input = ui.input(label='MAC浓度').classes('w-full mb-2')
-        safe_threshold_input = ui.input(label='安全阈值').classes('w-full mb-2')
-        warning_concentration_input = ui.input(
-            label='警戒浓度').classes('w-full mb-2')
-        danger_concentration_input = ui.input(
-            label='危险浓度').classes('w-full mb-2')
+        spec_input = ui.select(
+            options=SPEC_ID_OPTIONS,
+            value='CO',
+            label='FDS 组分名 SPEC_ID',
+            new_value_mode='add-unique').classes('w-full mt-2').props('dense outlined')
 
-        # 将输入字段存储到字典中以便访问
-        gas_inputs = {
-            '气体名称': gas_name_input,
-            '毒性等级': toxicity_input,
-            'IDLH浓度': idlh_input,
-            'MAC浓度': mac_input,
-            '安全阈值': safe_threshold_input,
-            '警戒浓度': warning_concentration_input,
-            '危险浓度': danger_concentration_input
-        }
+        t_end_input = ui.number('模拟时长 T_END (s)', value=20.0, min=0.1, step=1.0
+                                ).classes('w-full').props('dense outlined')
+        dt_input = ui.number('输出时间间隔 DT (s)', value=0.5, min=0.1, step=0.1
+                             ).classes('w-full').props('dense outlined')
 
-        # 添加保存按钮（如果需要保存修改）
-        # ui.button('保存修改', on_click=lambda: save_gas_changes(gas_inputs)).classes('w-full mt-4')
+        extra_spec_input = ui.textarea(
+            '附加 &SPEC 定义（可选，用于 FDS 不认识的组分）'
+        ).classes('w-full').props('dense outlined rows=2')
 
-    with template_card:
-        ui.label('气体扩散模板').classes('text-h6 mb-4')
-        template_select = ui.select(
-            options=['默认模板1', '默认模板2', '自定义模板'],
-            value='默认模板1',
-            label='选择模板'
-        ).classes('w-full')
+    # ---- 检测点 / 障碍物 ----
+    with device_card:
+        ui.label('检测点 DEVC（切片上的取数位置）').classes('text-h6 mb-2')
+        render_devices()
 
-    def update_gas_inputs():
-        """当气体选择改变时，填充所有输入字段"""
-        selected_gas_name = gas_select.value
-        if not selected_gas_name:
-            # 清空所有输入字段
-            for input_field in gas_inputs.values():
-                input_field.value = ''
-            return
+    with obstacle_card:
+        ui.label('障碍物 OBST（矩形，会画到环境图上）').classes('text-h6 mb-2')
+        render_obstacles()
 
-        # 查找选中的气体信息
-        gas_info = next(
-            (e for e in gases if e['气体名称'] == selected_gas_name), None)
-
-        if gas_info:
-            # 将所有值转换为字符串并填充到输入字段中
-            gas_inputs['气体名称'].value = str(gas_info.get('气体名称', ''))
-            gas_inputs['毒性等级'].value = str(gas_info.get('毒性等级', ''))
-            gas_inputs['IDLH浓度'].value = str(gas_info.get('IDLH浓度', ''))
-            gas_inputs['MAC浓度'].value = str(gas_info.get('MAC浓度', ''))
-            gas_inputs['安全阈值'].value = str(gas_info.get('安全阈值', ''))
-            gas_inputs['警戒浓度'].value = str(gas_info.get('警戒浓度', ''))
-            gas_inputs['危险浓度'].value = str(gas_info.get('危险浓度', ''))
-
-            # 可选：根据字段类型设置输入类型
-            set_input_attributes(gas_info)
-        else:
-            # 如果找不到气体，清空所有字段
-            for input_field in gas_inputs.values():
-                input_field.value = ''
-
-    def set_input_attributes(gas_info):
-        """根据数据类型设置输入属性"""
-        # 对于数值字段，可以设置输入类型
-        concentration_fields = ['IDLH浓度', 'MAC浓度', '安全阈值', '警戒浓度', '危险浓度']
-
-        for field in concentration_fields:
-            value = gas_info.get(field)
-            input_field = gas_inputs[field]
-
-            if isinstance(value, (int, float)):
-                # 设置为数字输入
-                input_field.props('type=number step=any')
-                # 可选：添加单位后缀
-                if field in ['IDLH浓度', 'MAC浓度', '警戒浓度', '危险浓度']:
-                    input_field.props(f'suffix=ppm')
-            else:
-                input_field.props('')
-
-    # 连接选择器变化事件
-    gas_select.on('update:model-value', update_gas_inputs)
-
-    # 初始填充（只在页面加载时执行一次）
-    if gases:
-        update_gas_inputs()
-
+    # ---- 房间图 ----
     with map_card:
-        # 嵌入iframe来显示地图页面
-        iframe = ui.html(f'''
-<div id='mapdiv'>
+        ui.html('''
+<div id='roomdiv'>
     <iframe
-        id="map-iframe"
+        id="room-iframe"
         src="/room"
-        style="width: 800px; height: 800px; border: none;"
-        title="地图"
+        style="width: 820px; height: 820px; border: none;"
+        title="FDS 房间"
     ></iframe>
 </div>
 ''', sanitize=False)
 
-    # return for simulation_page_fds()
+    # ---- 行为 ----
+    def update_room(session='???'):
+        stamp = int(datetime.now().timestamp() * 1000)
+        ui.run_javascript(f"""
+        var iframe = document.getElementById('room-iframe');
+        if (iframe) {{ iframe.src = '/room?session={session}&t={stamp}'; }}
+        """)
+        print(f'Update the room with {session=}')
+
+    def session_options():
+        mapping = {'success': '完成', 'failed': '失败', 'pending': '计算中'}
+        options = {}
+        for entry in list_fds_simulations():
+            state = mapping.get(entry['status'], entry['status'])
+            options[entry['session']] = (
+                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧")
+        return options
+
+    def update_simulation_history():
+        simulation_history_select.options = session_options()
+        simulation_history_select.update()
+
+    def on_select_session(e):
+        if e.value:
+            update_room(session=e.value)
+
+    def on_gas_change(e=None):
+        name = gas_select.value
+        info = next((g for g in gases if g['气体名称'] == name), None)
+        if not info:
+            gas_info_label.text = ''
+            return
+        guess = guess_spec_id(name)
+        if guess:
+            spec_input.value = guess
+        gas_info_label.text = (
+            f"分子式 {info.get('分子式') or '—'} · CAS {info.get('CAS号') or '—'} · "
+            f"毒性 {info.get('毒性等级') or '—'}"
+            + ('' if guess else '　（未自动匹配，请手动填写组分名）'))
+
+    def collect_config():
+        return {
+            'gas_name': gas_select.value or '',
+            'spec_id': str(spec_input.value or '').strip(),
+            't_end': float(t_end_input.value or 0.0),
+            'dt': float(dt_input.value or 0.0),
+            'slice_z': float(slice_z_input.value or 0.0),
+            'ijk': [int(ijk_x.value or 1), int(ijk_y.value or 1),
+                    int(ijk_z.value or 1)],
+            'xb': [float(w.value or 0.0) for w in xb_inputs],
+            'devices': collect_devices(),
+            'obstacles': collect_obstacles(),
+            'extra_spec': extra_spec_input.value or '',
+            'velocity_slice': bool(velocity_slice_checkbox.value),
+            'v_min': 0.0,
+            'v_max': None,
+        }
+
+    def on_click_start():
+        if not str(spec_input.value or '').strip():
+            ui.notify('请先填写 FDS 组分名 (SPEC_ID)', color='negative')
+            return
+
+        try:
+            config = collect_config()
+        except (TypeError, ValueError) as e:
+            ui.notify(f'参数不合法：{e}', color='negative')
+            return
+
+        reader = SensorDataReader()
+        sensors = reader.get_sensor_info()
+        for s in sensors:
+            try:
+                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+            except Exception:
+                pass
+
+        try:
+            session = simulate_with_fds(sensors, config)
+        except ValueError as e:
+            ui.notify(str(e), color='negative')
+            return
+        except Exception as e:
+            ui.notify(f'提交失败：{e}', color='negative')
+            return
+
+        update_simulation_history()
+        simulation_history_select.value = session
+        update_room(session=session)
+        status_label.text = f'正在计算：{session}'
+        ui.notify(f'已提交模拟：{session}', color='positive')
+
+    simulate_button.on('click', on_click_start)
+    refresh_history_button.on('click', lambda: (
+        update_simulation_history(),
+        ui.notify('历史列表已刷新'),
+    ))
+    gas_select.on_value_change(on_gas_change)
+    simulation_history_select.on_value_change(on_select_session)
+
+    if gases:
+        on_gas_change()
+    update_simulation_history()
+
     return
 
 # ---------------------------------------------------------------------------
