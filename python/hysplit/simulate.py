@@ -113,6 +113,10 @@ DEFAULT_CONFIG = {
     'top_height': 10000.0,
     'output_interval_minutes': 100,
     'weather_mode': 'file',      # file=用 gdas1 气象文件；manual=由界面输入合成
+    # 危险区阈值（与色标同单位，log10 相对值）。留空则查看结果时按量程自动取，
+    # 这两个值只是「看结果」的参数，不参与 HYSPLIT 计算本身。
+    'lvl1': None,
+    'lvl2': None,
 }
 
 # %%
@@ -455,7 +459,11 @@ def _read_json(p: Path, default=None):
 
 
 def list_hysplit_simulations() -> list:
-    """所有会话的概览，新的排在前面。"""
+    """所有会话的概览，新的排在前面。
+
+    v_min / v_max 一并带出：选历史结果时要先让用户看到这场的量程，
+    才知道致伤 / 致死阈值该定在哪。
+    """
     if not SIMULATION_DIR.is_dir():
         return []
 
@@ -470,6 +478,8 @@ def list_hysplit_simulations() -> list:
             'status': status,
             'note': note,
             'n_frames': int(frames.get('n_frames') or 0),
+            'v_min': frames.get('v_min'),
+            'v_max': frames.get('v_max'),
             'created': datetime.fromtimestamp(d.stat().st_mtime).strftime(
                 '%Y-%m-%d %H:%M:%S'),
         })

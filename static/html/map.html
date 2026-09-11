@@ -10,6 +10,7 @@
     <script src="/static/src/mapbox-gl.js"></script>
     <script src="/static/secret/config.js"></script>
     <script src="/static/src/turf.min.js"></script>
+    <script src="/static/src/contour.js"></script>
 
     <style>
         html,
@@ -125,6 +126,30 @@
             color: #555;
         }
 
+        #hudRow2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e0e0e0;
+            color: #333;
+        }
+
+        #hudRow2 input.num {
+            width: 92px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            padding: 1px 4px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #contourNote {
+            color: #666;
+        }
+
         .swatch {
             display: inline-block;
             width: 12px;
@@ -185,6 +210,14 @@
             <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
             <button id="templateBtn" class="btn" title="查看本次实际使用的 CONTROL">查看 CONTROL</button>
         </div>
+        <div id="hudRow2">
+            <label class="chk"><input id="contourChk" type="checkbox" checked> 危险区等值线</label>
+            <span class="swatch" style="background:#f08c00"></span>
+            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+            <span class="swatch" style="background:#c1121f"></span>
+            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <span id="contourNote">—</span>
+        </div>
         <div id="legendLine">
             浓度
             <span class="swatch" style="background:#FDE725"></span>高
@@ -223,6 +256,13 @@
             vMin: 0,
             vMax: 5,
             releaseDrawn: false,
+            // 危险区阈值：与色标同单位（log10 相对值），改完立刻重画等值线
+            showContour: true,
+            lvl1: null,
+            lvl2: null,
+            lvlInit: false,
+            pointsCache: new Map(),   // 帧号 -> 该帧散点
+            gridCache: new Map(),     // 帧号 -> 该帧规则网格
         };
 
         function setStatus(status, note) {
@@ -263,7 +303,11 @@
             setStatus(resp.status, resp.note);
             state.vMin = (resp.v_min === null || resp.v_min === undefined) ? 0 : resp.v_min;
             state.vMax = (resp.v_max === null || resp.v_max === undefined) ? 5 : resp.v_max;
-            $('scaleText').textContent = `log10 相对值 ${Number(state.vMin).toFixed(2)} ~ ${Number(state.vMax).toFixed(2)}`;
+
+            // 选中一场结果先把它的值范围摆出来，用户才知道该把阈值定在哪
+            $('scaleText').textContent =
+                `　量程 ${fmtNum(state.vMin)} ~ ${fmtNum(state.vMax)}（log10 相对值）`;
+            initLevels(resp);
 
             if (resp.status === 'pending') {
                 $('runningSpan').textContent = resp.exists ? '模拟正在计算，请稍候…' : '尚未开始';
@@ -286,6 +330,8 @@
             if (frames.length !== state.frames.length ||
                 (frames.length && state.frames.length && frames[0].file !== state.frames[0].file)) {
                 state.frames = frames;
+                state.pointsCache.clear();
+                state.gridCache.clear();
                 const range = $('frameRange');
                 range.min = 0;
                 range.max = Math.max(0, frames.length - 1);
@@ -299,14 +345,14 @@
             setFrameLabel();
 
             drawEnvMarkers(resp.environment);
-            if (has && state.mapReady) drawFrame();
+            if (has && state.mapReady) renderFrame();
         }
 
         /** 帧列表 / 滑块拖动 */
         function onFrameInput() {
             state.index = parseInt($('frameRange').value, 10) || 0;
             setFrameLabel();
-            drawFrame();
+            renderFrame();
         }
 
         function togglePlay() {
@@ -323,8 +369,20 @@
                 state.index = (state.index + 1) % state.frames.length;
                 $('frameRange').value = state.index;
                 setFrameLabel();
-                drawFrame();
+                renderFrame();
             }, 700);
+        }
+
+        /** 换帧的统一入口：先确保 table.json 到位，再画热力图与等值线。 */
+        async function renderFrame() {
+            try {
+                await loadTable();
+            } catch (e) {
+                console.warn('读取 table.json 失败', e);
+                return;
+            }
+            drawFrame();
+            drawContours();
         }
 
         /** 在图上标出释放点（来自 environment.release_points） */
@@ -369,6 +427,21 @@
 
             $('frameRange').addEventListener('input', onFrameInput);
             $('playBtn').addEventListener('click', togglePlay);
+
+            // 阈值改一下立刻重画等值线，不碰后台模拟结果
+            const onLevelInput = () => {
+                state.lvl1 = Number($('lvl1Input').value);
+                state.lvl2 = Number($('lvl2Input').value);
+                state.lvlInit = true;
+                drawContours();
+            };
+            $('lvl1Input').addEventListener('input', onLevelInput);
+            $('lvl2Input').addEventListener('input', onLevelInput);
+            $('contourChk').addEventListener('change', (e) => {
+                state.showContour = e.target.checked;
+                drawContours();
+            });
+
             $('templateBtn').addEventListener('click', async () => {
                 const box = $('templateBox');
                 if (box.style.display === 'block') {
@@ -417,31 +490,37 @@
             return state.table;
         }
 
-        /** 把当前帧画到地图上 */
-        async function drawFrame() {
-            const frame = state.frames[state.index];
-            if (!frame) return;
+        /**
+         * 从 table.json 里挑出某一帧的散点。
+         *
+         * table.json 是 pandas 的 to_json 默认输出：列优先，每列是一个
+         * 以行号为键的对象，不是数组。所以只能用 for...in，不能靠
+         * resp.LON.length 去数长度。
+         */
+        function framePoints(frame) {
+            const table = state.table;
+            if (!frame || !table || !table.LON) return [];
 
-            let resp;
-            try {
-                resp = await loadTable();
-            } catch (e) {
-                console.warn('读取 table.json 失败', e);
-                return;
-            }
-            if (!resp || !resp.LON) return;
+            const cached = state.pointsCache.get(frame.index);
+            if (cached) return cached;
 
             const day = Number(frame.day);
             const hr = Number(frame.hour);
-
-            // table.json 是 pandas 的 to_json 默认输出：列优先，
-            // 每列是一个以行号为键的对象，不是数组。所以只能用 for...in，
-            // 不能靠 resp.LON.length 去数长度。
             const points = [];
-            for (const i in resp.LON) {
-                if (Number(resp.DAY[i]) !== day || Number(resp.HR[i]) !== hr) continue;
-                points.push({ lon: resp.LON[i], lat: resp.LAT[i], value: resp.m[i] });
+            for (const i in table.LON) {
+                if (Number(table.DAY[i]) !== day || Number(table.HR[i]) !== hr) continue;
+                points.push({ lon: table.LON[i], lat: table.LAT[i], value: table.m[i] });
             }
+            state.pointsCache.set(frame.index, points);
+            return points;
+        }
+
+        /** 把当前帧的热力图画到地图上 */
+        function drawFrame() {
+            const frame = state.frames[state.index];
+            if (!frame) return;
+
+            const points = framePoints(frame);
             if (!points.length) return;
 
             const features = points.map(p =>
@@ -509,6 +588,223 @@
                     'heatmap-opacity': 0.7
                 }
             });
+
+            // 等值线要盖在热力图上面，热力图层是刚加的，把它压回去
+            raiseContourLayers();
+        }
+
+        // ------------------------------------------------------------------
+        // 危险区等值线（致伤 / 致死）
+        // ------------------------------------------------------------------
+
+        // con2asc 吐出来的浓度点落在 HYSPLIT 的原生浓度网格上（默认 0.05°，
+        // 而且只输出非零格点）。靠这个间距把散点还原成规则网格，才谈得上画等值线。
+        const GRID_FALLBACK_STEP = 0.05;
+        // 数据外圈补几格。不补的话阈值稍低一点等值线就贴着数据边缘被裁断。
+        const GRID_PAD = 5;
+
+        const CONTOUR_STYLE = {
+            lvl1: { line: '#f08c00', fill: '#f08c00', fillOpacity: 0.20, width: 2.5, label: '致伤区' },
+            lvl2: { line: '#c1121f', fill: '#c1121f', fillOpacity: 0.30, width: 3, label: '致死区' },
+        };
+
+        const EMPTY_FC = { type: 'FeatureCollection', features: [] };
+
+        const CONTOUR_LAYERS = [
+            { id: 'contour-fill-lvl1', type: 'fill', src: 'contour-fill-src-lvl1', key: 'lvl1' },
+            { id: 'contour-fill-lvl2', type: 'fill', src: 'contour-fill-src-lvl2', key: 'lvl2' },
+            { id: 'contour-line-lvl1', type: 'line', src: 'contour-line-src-lvl1', key: 'lvl1' },
+            { id: 'contour-line-lvl2', type: 'line', src: 'contour-line-src-lvl2', key: 'lvl2' },
+        ];
+
+        function fmtNum(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '—';
+            if (n === 0) return '0';
+            if (Math.abs(n) < 1e-3 || Math.abs(n) >= 1e5) return n.toExponential(2);
+            return String(Number(n.toPrecision(4)));
+        }
+
+        function contourSourceId(key, kind) {
+            return `contour-${kind}-src-${key}`;
+        }
+
+        function frameGrid(frame, points) {
+            const cached = state.gridCache.get(frame.index);
+            if (cached) return cached;
+            // 网格反推、平滑、外圈补 padding 这些纯计算都放在 contour.js 里，
+            // 跟 FDS 房间页共用一份实现。
+            // smooth=2：散点直接等值线会出现一堆孤立碎块，平滑两遍才连得成片。
+            const grid = Contour.gridFromPoints(points, {
+                pad: GRID_PAD,
+                step: GRID_FALLBACK_STEP,
+                smooth: 2,
+            });
+            state.gridCache.set(frame.index, grid);
+            return grid;
+        }
+
+        function ringToFeature(ring, grid, asPolygon) {
+            const coords = ring.map(p => [
+                grid.lon0 + p[0] * grid.dlon,
+                grid.lat0 + p[1] * grid.dlat,
+            ]);
+            if (!coords.length) return null;
+            coords.push([coords[0][0], coords[0][1]]);   // GeoJSON 要求闭环
+            return {
+                type: 'Feature',
+                properties: {},
+                geometry: asPolygon
+                    ? { type: 'Polygon', coordinates: [coords] }
+                    : { type: 'LineString', coordinates: coords },
+            };
+        }
+
+        function ensureContourLayers() {
+            for (const def of CONTOUR_LAYERS) {
+                if (!map.getSource(def.src)) {
+                    map.addSource(def.src, { type: 'geojson', data: EMPTY_FC });
+                }
+                if (map.getLayer(def.id)) continue;
+                const st = CONTOUR_STYLE[def.key];
+                if (def.type === 'fill') {
+                    map.addLayer({
+                        id: def.id, type: 'fill', source: def.src,
+                        paint: {
+                            'fill-color': st.fill,
+                            'fill-opacity': st.fillOpacity,
+                        },
+                    });
+                } else {
+                    map.addLayer({
+                        id: def.id, type: 'line', source: def.src,
+                        layout: { 'line-join': 'round', 'line-cap': 'round' },
+                        paint: {
+                            'line-color': st.line,
+                            'line-width': st.width,
+                            'line-opacity': 0.95,
+                        },
+                    });
+                }
+            }
+        }
+
+        /** 把等值线图层抬到热力图上面，顺序是填充在下、描边在上。 */
+        function raiseContourLayers() {
+            CONTOUR_LAYERS.forEach((def) => {
+                if (map.getLayer(def.id)) map.moveLayer(def.id);
+            });
+        }
+
+        function setContourData(key, kind, features) {
+            const src = map.getSource(contourSourceId(key, kind));
+            if (src) src.setData({ type: 'FeatureCollection', features });
+        }
+
+        function clearContours() {
+            ['lvl1', 'lvl2'].forEach((key) => {
+                setContourData(key, 'fill', []);
+                setContourData(key, 'line', []);
+            });
+        }
+
+        function drawContours() {
+            if (!state.mapReady || typeof Contour === 'undefined') return;
+
+            const frame = state.frames[state.index];
+            const points = frame ? framePoints(frame) : [];
+            if (!frame || !state.showContour || points.length < 3) {
+                clearContours();
+                updateContourLegend(null);
+                return;
+            }
+
+            ensureContourLayers();
+
+            const grid = frameGrid(frame, points);
+            const found = {};
+
+            // 致死区在致伤区里面，所以填充顺序也是从低阈值到高阈值
+            for (const key of ['lvl1', 'lvl2']) {
+                const level = Number(state[key]);
+                if (!isFinite(level)) {
+                    found[key] = null;
+                    setContourData(key, 'fill', []);
+                    setContourData(key, 'line', []);
+                    continue;
+                }
+                // 阈值低到整片数据都在区内，收不了口，硬画只会得到一条锯齿框
+                if (level <= grid.lo) {
+                    found[key] = -1;
+                    setContourData(key, 'fill', []);
+                    setContourData(key, 'line', []);
+                    continue;
+                }
+
+                const rings = Contour.rings(grid.values, grid.gw, grid.gh, level);
+                found[key] = rings.length;
+
+                const polygons = [];
+                const lines = [];
+                for (const ring of rings) {
+                    const smooth = Contour.smoothRing(ring, 2);
+                    const poly = ringToFeature(smooth, grid, true);
+                    const line = ringToFeature(smooth, grid, false);
+                    if (poly) polygons.push(poly);
+                    if (line) lines.push(line);
+                }
+                setContourData(key, 'fill', polygons);
+                setContourData(key, 'line', lines);
+            }
+
+            raiseContourLayers();
+            updateContourLegend(found);
+        }
+
+        function updateContourLegend(found) {
+            const el = $('contourNote');
+            if (!el) return;
+            if (!state.showContour) { el.textContent = '（已隐藏）'; return; }
+            if (!found) { el.textContent = '—'; return; }
+
+            const parts = [];
+            for (const key of ['lvl1', 'lvl2']) {
+                const label = `${CONTOUR_STYLE[key].label} ≥ ${fmtNum(state[key])}`;
+                const n = found[key];
+                if (n === null || n === undefined) parts.push(`${label} 未设`);
+                else if (n < 0) parts.push(`${label} 整片超阈值`);
+                else if (n === 0) parts.push(`${label} 无`);
+                else parts.push(`${label} ${n} 块`);
+            }
+            el.textContent = parts.join('　|　');
+        }
+
+        /** 首次拿到结果时定阈值：优先用会话里存的，没有就按量程取 */
+        function initLevels(res) {
+            if (state.lvlInit) return;
+            const cfg = (res && res.config) || {};
+            let lo = Number(state.vMin);
+            let hi = Number(state.vMax);
+            if (!isFinite(lo)) lo = 0;
+            if (!isFinite(hi) || hi <= lo) hi = lo + 1;
+            const span = hi - lo;
+
+            const pick = (v, fallback) => {
+                const n = Number(v);
+                return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
+            };
+            // 没存过阈值就按量程取。0.35 / 0.60 是拿两套真实结果试出来的：
+            // 低一点整片都是危险区，高一点又只剩几个点
+            state.lvl1 = pick(cfg.lvl1, Number((lo + span * 0.35).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.60).toPrecision(4)));
+            $('lvl1Input').value = state.lvl1;
+            $('lvl2Input').value = state.lvl2;
+
+            const step = (span / 100).toPrecision(2);
+            $('lvl1Input').step = step;
+            $('lvl2Input').step = step;
+
+            state.lvlInit = true;
         }
 
         /**

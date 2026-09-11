@@ -1,5 +1,6 @@
 # %%
 import json
+import math
 import contextlib
 import pandas as pd
 
@@ -1892,6 +1893,43 @@ async def get_hysplit_simulation_template_page(session: str):
 # ---------------------------------------------------------------------------
 
 
+def fmt_number(value, digits=4):
+    """给历史下拉的标签用的短数字格式。取不到就返回 None。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    if f == 0:
+        return '0'
+    if abs(f) < 1e-3 or abs(f) >= 1e5:
+        return f'{f:.2e}'
+    return f'{f:.{digits}g}'
+
+
+def value_range_suffix(entry):
+    """历史下拉标签里追加「量程 a ~ b」，让用户选之前就知道结果多大。
+
+    量程来自各会话的 frames.json；还没出帧的会话就没有这一段。
+    """
+    lo = fmt_number(entry.get('v_min'))
+    hi = fmt_number(entry.get('v_max'))
+    if lo is None or hi is None:
+        return ''
+    return f'  ·  量程 {lo} ~ {hi}'
+
+
+def opt_number(value):
+    """NiceGUI 数字输入 -> float 或 None（空着就让查看端按量程自动取）。"""
+    if value is None or value == '':
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @ui.page('/simulationFDS')
 @with_layout_full_width
 async def simulation_page_fds():
@@ -2085,6 +2123,16 @@ async def simulation_page_fds():
             '附加 &SPEC 定义（可选，用于 FDS 不认识的组分）'
         ).classes('w-full').props('dense outlined rows=2')
 
+        # 危险区阈值只影响「怎么看结果」，不影响 FDS 计算。
+        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        ui.label('危险区阈值（等值线，体积分数）').classes(
+            'text-xs text-gray-500 mt-2')
+        with ui.grid(columns=2).classes('w-full gap-1'):
+            lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+                                   ).props('dense outlined clearable')
+            lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+                                   ).props('dense outlined clearable')
+
     # ---- 检测点 / 障碍物 ----
     with device_card:
         ui.label('检测点 DEVC（切片上的取数位置）').classes('text-h6 mb-2')
@@ -2122,7 +2170,8 @@ async def simulation_page_fds():
         for entry in list_fds_simulations():
             state = mapping.get(entry['status'], entry['status'])
             options[entry['session']] = (
-                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧")
+                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧"
+                + value_range_suffix(entry))
         return options
 
     def update_simulation_history():
@@ -2163,6 +2212,8 @@ async def simulation_page_fds():
             'velocity_slice': bool(velocity_slice_checkbox.value),
             'v_min': 0.0,
             'v_max': None,
+            'lvl1': opt_number(lvl1_input.value),
+            'lvl2': opt_number(lvl2_input.value),
         }
 
     def on_click_start():
@@ -2259,7 +2310,8 @@ async def simulation_page_hysplit():
         for entry in list_hysplit_simulations():
             state = mapping.get(entry['status'], entry['status'])
             options[entry['session']] = (
-                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧")
+                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧"
+                + value_range_suffix(entry))
         return options
 
     def update_simulation_history():
@@ -2290,6 +2342,8 @@ async def simulation_page_hysplit():
             'day': int(day_input.value or 0),
             'start_hour': int(start_hour_input.value or 0),
             'duration_hours': int(duration_input.value or 0),
+            'lvl1': opt_number(lvl1_input.value),
+            'lvl2': opt_number(lvl2_input.value),
         }
 
     def on_click():
@@ -2377,6 +2431,16 @@ async def simulation_page_hysplit():
         duration_input = ui.number(
             '模拟时长 (h)', value=24, min=1, max=240, step=1, precision=0
         ).classes('w-full mt-1').props('dense outlined')
+
+        # 危险区阈值只影响「怎么看结果」，不影响 HYSPLIT 计算。
+        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        ui.label('危险区阈值（等值线）').classes('text-h6 mt-4 mb-2')
+        lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+                               ).classes('w-full mb-2').props('dense outlined clearable')
+        lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+                               ).classes('w-full').props('dense outlined clearable')
+        ui.label('阈值与色标同单位（log10 相对值）').classes(
+            'text-xs text-gray-500 mt-1')
 
         met_label = ui.label('').classes('text-xs text-gray-500 mt-2')
 

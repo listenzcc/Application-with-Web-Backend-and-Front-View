@@ -118,6 +118,10 @@ DEFAULT_CONFIG = {
     'velocity_slice': True,
     'v_min': 0.0,
     'v_max': None,
+    # 危险区阈值（体积分数）。留空则查看结果时按量程自动取，
+    # 这两个值只是「看结果」的参数，不参与 FDS 计算本身。
+    'lvl1': None,
+    'lvl2': None,
 }
 
 # 供 subprocess 写日志用，避免文件对象被 GC 提前关掉
@@ -490,8 +494,23 @@ def simulation_dir(session: str) -> Path:
     return SIMULATION_DIR / session
 
 
+def _read_frames_meta(d: Path) -> dict:
+    """frames.json 里的元信息：times / files / v_min / v_max。"""
+    p = d / FRAMES_NAME
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
 def list_fds_simulations() -> list:
-    """按时间倒序列出全部模拟目录及其状态。"""
+    """按时间倒序列出全部模拟目录及其状态。
+
+    v_min / v_max 也带出来：选历史结果时先让用户看到这场算出来的量程，
+    才知道致伤 / 致死阈值该定在哪。
+    """
     if not SIMULATION_DIR.is_dir():
         return []
 
@@ -500,15 +519,19 @@ def list_fds_simulations() -> list:
         if not d.is_dir():
             continue
         status = simulation_status(d)
-        n_frames = 0
-        img_dir = d / IMG_DIR
-        if img_dir.is_dir():
-            n_frames = sum(1 for f in img_dir.iterdir()
-                           if f.suffix.lower() == '.png')
+        meta = _read_frames_meta(d)
+        n_frames = len(meta.get('files') or [])
+        if not n_frames:
+            img_dir = d / IMG_DIR
+            if img_dir.is_dir():
+                n_frames = sum(1 for f in img_dir.iterdir()
+                               if f.suffix.lower() == '.png')
         out.append({
             'session': d.name,
             'status': status,
             'n_frames': n_frames,
+            'v_min': meta.get('v_min'),
+            'v_max': meta.get('v_max'),
             'created': d.stat().st_mtime,
             'note': _read_marker(d / (FAILED_MARKER if status == 'failed'
                                       else SUCCESS_MARKER)),
@@ -532,13 +555,7 @@ def get_fds_simulation_template(session: str) -> str:
 
 def _frames_of(d: Path, config: dict) -> list:
     """帧列表：[{index, file, time}]，优先用 txt2gif 写的 frames.json。"""
-    meta = {}
-    p = d / FRAMES_NAME
-    if p.is_file():
-        try:
-            meta = json.loads(p.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            meta = {}
+    meta = _read_frames_meta(d)
 
     times = meta.get('times') or []
     img_dir = d / IMG_DIR
@@ -609,14 +626,9 @@ def get_fds_simulation_result(session: str) -> dict:
     result['frames'] = _frames_of(d, cfg)
     result['n_frames'] = len(result['frames'])
 
-    meta_path = d / FRAMES_NAME
-    if meta_path.is_file():
-        try:
-            meta = json.loads(meta_path.read_text(encoding='utf-8'))
-            result['v_min'] = meta.get('v_min')
-            result['v_max'] = meta.get('v_max')
-        except (OSError, ValueError):
-            pass
+    meta = _read_frames_meta(d)
+    result['v_min'] = meta.get('v_min')
+    result['v_max'] = meta.get('v_max')
 
     devc_files = sorted(d.glob('*_devc.csv'))
     if devc_files:

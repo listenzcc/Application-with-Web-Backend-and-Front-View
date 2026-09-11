@@ -158,7 +158,32 @@
             cursor: pointer;
             user-select: none;
         }
+
+        #hudRow2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e0e0e0;
+        }
+
+        #hudRow2 input.num {
+            width: 90px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            padding: 1px 4px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #contourNote {
+            color: #666;
+        }
     </style>
+
+    <script src="/static/src/contour.js"></script>
 </head>
 
 <body>
@@ -166,6 +191,7 @@
         <canvas id="roomCanvas"></canvas>
         <canvas id="environmentCanvas"></canvas>
         <canvas id="simulationCanvas"></canvas>
+        <canvas id="contourCanvas"></canvas>
         <canvas id="devicesCanvas"></canvas>
         <canvas id="sensorsCanvas"></canvas>
 
@@ -184,6 +210,14 @@
                 <label class="chk"><input id="devcChk" type="checkbox" checked> 检测点</label>
                 <label class="chk"><input id="sensorChk" type="checkbox" checked> 传感器</label>
                 <button id="templateBtn" class="btn">查看 template.fds</button>
+            </div>
+            <div id="hudRow2">
+                <label class="chk"><input id="contourChk" type="checkbox" checked> 危险区等值线</label>
+                <span class="swatch" style="background:#f08c00"></span>
+                <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+                <span class="swatch" style="background:#c1121f"></span>
+                <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+                <span id="contourNote">—</span>
             </div>
             <div id="legendLine" style="margin-top:6px;color:#555">
                 <span class="swatch" style="background:#ff0000"></span>高浓度
@@ -222,6 +256,11 @@
             showEnv: true,
             showDevc: true,
             showSensors: true,
+            showContour: true,
+            // 危险区阈值：与色标同单位（体积分数），可随时改，改完立刻重画
+            lvl1: null,
+            lvl2: null,
+            lvlInit: false,
             frameCache: new Map(),
         };
 
@@ -230,6 +269,7 @@
             room: $('roomCanvas'),
             env: $('environmentCanvas'),
             sim: $('simulationCanvas'),
+            contour: $('contourCanvas'),
             devc: $('devicesCanvas'),
             sensors: $('sensorsCanvas'),
         };
@@ -469,6 +509,12 @@
 
     <!-- 气体图层 -->
     <script>
+        /**
+         * 取一帧，同时返回上色后的图和原始浓度网格。
+         *
+         * txt2gif.py 把浓度线性压成 8 位灰度存的 PNG，所以这张图本身就是
+         * 「值图」：反算回浓度后，等值线可以在浏览器里现算，改阈值不必重跑 FDS。
+         */
         async function frameImage(file) {
             if (state.frameCache.has(file)) return state.frameCache.get(file);
 
@@ -476,16 +522,22 @@
             img.src = frameApiUrl(file);
             await img.decode();
 
+            const gw = img.naturalWidth;
+            const gh = img.naturalHeight;
             const off = document.createElement('canvas');
-            off.width = img.naturalWidth;
-            off.height = img.naturalHeight;
-            const octx = off.getContext('2d');
+            off.width = gw;
+            off.height = gh;
+            const octx = off.getContext('2d', { willReadFrequently: true });
             octx.drawImage(img, 0, 0);
 
-            const imageData = octx.getImageData(0, 0, off.width, off.height);
+            const imageData = octx.getImageData(0, 0, gw, gh);
             const d = imageData.data;
-            for (let i = 0; i < d.length; i += 4) {
+
+            // values 是 0~1 的归一化浓度，坐标换算用 v_min / v_max 还原真值
+            const values = new Float32Array(gw * gh);
+            for (let p = 0, i = 0; i < d.length; i += 4, p++) {
                 const gray = (d[i] + d[i + 1] + d[i + 2]) / 3;
+                values[p] = gray / 255;
                 if (gray === 0) {
                     d[i + 3] = 0;                 // 没有气体 -> 完全透明
                 } else {
@@ -496,8 +548,10 @@
                 }
             }
             octx.putImageData(imageData, 0, 0);
-            state.frameCache.set(file, off);
-            return off;
+
+            const entry = { canvas: off, values, gw, gh };
+            state.frameCache.set(file, entry);
+            return entry;
         }
 
         async function drawSimulationFrame() {
@@ -508,12 +562,161 @@
             if (!frame) return;
 
             try {
-                const off = await frameImage(frame.file);
+                const entry = await frameImage(frame.file);
                 ctx.clearRect(0, 0, W(), H());
-                ctx.drawImage(off, 0, 0, W(), H());
+                ctx.drawImage(entry.canvas, 0, 0, W(), H());
             } catch (err) {
                 console.error('气体帧加载失败', frame, err);
             }
+        }
+    </script>
+
+    <!-- 危险区等值线 -->
+    <script>
+        // 致伤=琥珀，致死=猩红。填充压在气体层上，透明度取小些别把浓度渐变盖死。
+        const CONTOUR_STYLE = {
+            lvl1: { line: '#f08c00', fill: 'rgba(240,140,0,0.18)', label: '致伤区' },
+            lvl2: { line: '#c1121f', fill: 'rgba(193,18,31,0.26)', label: '致死区' },
+        };
+
+        function fmtNum(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '—';
+            if (n === 0) return '0';
+            if (Math.abs(n) < 1e-3 || Math.abs(n) >= 1e5) return n.toExponential(2);
+            return String(Number(n.toPrecision(4)));
+        }
+
+        /** 本次模拟的浓度量程，等值线阈值就是在这个区间里取。 */
+        function contourValueRange() {
+            const res = state.result || {};
+            let lo = Number(res.v_min);
+            let hi = Number(res.v_max);
+            if (!isFinite(lo)) lo = 0;
+            if (!isFinite(hi) || hi <= lo) hi = lo + 1;
+            return [lo, hi];
+        }
+
+        /** 首帧时按会话配置或量程定阈值；之后只由用户改，不再自动覆盖。 */
+        function initLevels() {
+            if (state.lvlInit) return;
+            const cfg = (state.result && state.result.config) || {};
+            const [vlo, vhi] = contourValueRange();
+            const span = (vhi - vlo) || 1;
+            const pick = (v, fallback) => {
+                const n = Number(v);
+                return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
+            };
+
+            state.lvl1 = pick(cfg.lvl1, Number((vlo + span * 0.35).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, Number((vlo + span * 0.60).toPrecision(4)));
+            $('lvl1Input').value = state.lvl1;
+            $('lvl2Input').value = state.lvl2;
+
+            const step = (span / 100).toPrecision(2);
+            $('lvl1Input').step = step;
+            $('lvl2Input').step = step;
+
+            state.lvlInit = true;
+        }
+
+        async function drawContours() {
+            const ctx = canvases.contour.getContext('2d');
+            ctx.clearRect(0, 0, W(), H());
+
+            const frame = state.frames[state.index];
+            if (!state.showContour || !frame || typeof Contour === 'undefined') {
+                updateContourLegend(null);
+                return;
+            }
+
+            let entry;
+            try {
+                entry = await frameImage(frame.file);
+            } catch (err) {
+                console.error('等值线取数失败', err);
+                return;
+            }
+
+            // 播放/拖滑块会连着触发，落后了就丢掉这次结果，免得画面往回跳
+            if (state.frames[state.index] !== frame) return;
+
+            const [vlo, vhi] = contourValueRange();
+            const span = (vhi - vlo) || 1;
+            const found = {};
+
+            // 先低阈值后高阈值，保证套叠关系（致死区压在致伤区上面）
+            for (const key of ['lvl1', 'lvl2']) {
+                const level = Number(state[key]);
+                if (!isFinite(level)) { found[key] = null; continue; }
+
+                const norm = (level - vlo) / span;
+                if (norm <= 0) {
+                    // 阈值低到全区域都在区内，直接铺满，画不出闭合环
+                    found[key] = -1;
+                    ctx.save();
+                    ctx.fillStyle = CONTOUR_STYLE[key].fill;
+                    ctx.fillRect(0, 0, W(), H());
+                    ctx.restore();
+                    continue;
+                }
+                if (norm > 1.0000001) { found[key] = 0; continue; }
+
+                const rings = Contour.rings(entry.values, entry.gw, entry.gh, norm);
+                found[key] = rings.length;
+                drawContourRings(ctx, rings, entry.gw, entry.gh,
+                    CONTOUR_STYLE[key], key === 'lvl2');
+            }
+            updateContourLegend(found);
+        }
+
+        function drawContourRings(ctx, rings, gw, gh, style, emphasize) {
+            if (!rings.length) return;
+
+            const path = new Path2D();
+            for (const ring of rings) {
+                const pts = Contour.smoothRing(ring, 1);
+                if (pts.length < 3) continue;
+                for (let k = 0; k < pts.length; k++) {
+                    // 网格下标 -> 画布坐标。0.5 是像素中心补偿，
+                    // 跟 drawImage 把整幅图拉伸到画布是同一套映射。
+                    const fx = (pts[k][0] + 0.5) / gw;
+                    const fy = (pts[k][1] + 0.5) / gh;
+                    const x = fx * W();
+                    const y = state.flipY ? (1 - fy) * H() : fy * H();
+                    if (k === 0) path.moveTo(x, y); else path.lineTo(x, y);
+                }
+                path.closePath();
+            }
+
+            ctx.save();
+            ctx.fillStyle = style.fill;
+            ctx.fill(path, 'evenodd');
+            ctx.strokeStyle = style.line;
+            ctx.lineWidth = emphasize ? 2.6 : 2;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.setLineDash(emphasize ? [] : [8, 4]);
+            ctx.stroke(path);
+            ctx.restore();
+        }
+
+        function updateContourLegend(found) {
+            const el = $('contourNote');
+            if (!el) return;
+            if (!state.showContour) { el.textContent = '（已隐藏）'; return; }
+            if (!found) { el.textContent = '—'; return; }
+
+            const parts = [];
+            for (const key of ['lvl1', 'lvl2']) {
+                const label = `${CONTOUR_STYLE[key].label} ≥ ${fmtNum(state[key])}`;
+                const n = found[key];
+                if (n === null || n === undefined) parts.push(`${label} 未设`);
+                else if (n < 0) parts.push(`${label} 全区域超阈值`);
+                else if (n === 0) parts.push(`${label} 无`);
+                else parts.push(`${label} ${n} 块`);
+            }
+            el.textContent = parts.join('　|　');
         }
     </script>
 
@@ -641,9 +844,10 @@
                 `障碍物 ${(env.obst || []).length}`,
             ].filter(Boolean).join(' · ') : '在左侧选择或启动一次模拟';
 
+            // 选择历史结果时，先让用户看到这场的值范围
             if (res.v_max !== null && res.v_max !== undefined) {
                 $('scaleText').textContent =
-                    `   浓度映射 ${res.v_min} ~ ${res.v_max}（体积分数）`;
+                    `   浓度量程 ${fmtNum(res.v_min)} ~ ${fmtNum(res.v_max)}（体积分数）`;
             } else {
                 $('scaleText').textContent = '';
             }
@@ -689,9 +893,11 @@
 
             renderHud();
             updateFrameLabel();
+            initLevels();
             drawEnvironment();
             drawDevices();
             drawSimulationFrame();
+            drawContours();
 
             // 计算中：把目录里已经产出的文件列出来，继续等
             if (res.status === 'pending') {
@@ -721,6 +927,7 @@
             $('frameRange').value = String(state.index);
             updateFrameLabel();
             drawSimulationFrame();
+            drawContours();
             drawDevices();
         }
 
@@ -756,6 +963,7 @@
             drawRoomBackground();
             drawEnvironment();
             drawSimulationFrame();
+            drawContours();
             drawDevices();
             drawSensorsOnCanvas();
         }
@@ -774,6 +982,7 @@
             $('flipYChk').addEventListener('change', (e) => {
                 state.flipY = e.target.checked;
                 drawEnvironment();
+                drawContours();
                 drawDevices();
             });
             $('envChk').addEventListener('change', (e) => {
@@ -788,6 +997,21 @@
                 state.showSensors = e.target.checked;
                 drawSensorsOnCanvas();
             });
+
+            // 阈值改一下就重画，不碰模拟结果
+            const onLevelInput = () => {
+                state.lvl1 = Number($('lvl1Input').value);
+                state.lvl2 = Number($('lvl2Input').value);
+                state.lvlInit = true;
+                drawContours();
+            };
+            $('lvl1Input').addEventListener('input', onLevelInput);
+            $('lvl2Input').addEventListener('input', onLevelInput);
+            $('contourChk').addEventListener('change', (e) => {
+                state.showContour = e.target.checked;
+                drawContours();
+            });
+
             $('templateBtn').addEventListener('click', () => {
                 const box = $('templateBox');
                 box.style.display = box.style.display === 'block' ? 'none' : 'block';
