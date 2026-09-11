@@ -98,6 +98,8 @@ def create_header():
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('气体管理', '/gasExplorer',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
+                    ui.link('化学品管理', '/chemicalExplorer',
+                            ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('权限管理', '/privilege',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('传感器管理', '/sensors',

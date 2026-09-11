@@ -3,7 +3,10 @@ private
 received
 .nicegui
 *.db
+*.db.*
 *.log
+
+.workbuddy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

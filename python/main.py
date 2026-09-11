@@ -149,6 +149,7 @@ class GasManagementUI:
         self.toxicity_filter = ""
         self.sort_column = "气体名称"
         self.sort_ascending = True
+        self.toxicity_options = gas_db.get_toxicity_classes()
 
         self.refresh_data()
         self.create_ui()
@@ -179,25 +180,27 @@ class GasManagementUI:
 
     def on_add_gas(self):
         """添加气体对话框"""
-        with ui.dialog() as dialog, ui.card():
+        with ui.dialog() as dialog, ui.card().style('width:720px; max-width:100%'):
             ui.label('添加新气体').classes('text-h6')
 
-            with ui.column():
+            with ui.grid(columns=2).classes('w-full gap-x-6 gap-y-2'):
                 gas_name = ui.input('气体名称').classes('w-full')
                 formula = ui.input('分子式').classes('w-full')
                 cas_no = ui.input('CAS号').classes('w-full')
-                mol_weight = ui.number('分子量', value=0.0).classes('w-full')
+                mol_weight = ui.number('分子量').classes('w-full')
                 toxicity = ui.select(
-                    ['高毒', '中毒', '低毒'],
-                    label='毒性等级'
+                    self.toxicity_options,
+                    label='毒性等级',
+                    with_input=True
                 ).classes('w-full')
-                boiling_pt = ui.number('沸点(℃)', value=0.0).classes('w-full')
-                melting_pt = ui.number('熔点(℃)', value=0.0).classes('w-full')
+                boiling_pt = ui.input('沸点(℃)').classes('w-full')
+                melting_pt = ui.input('熔点(℃)').classes('w-full')
                 idlh = ui.input('IDLH浓度').classes('w-full')
                 mac = ui.input('MAC浓度').classes('w-full')
                 threshold1 = ui.input('安全阈值').classes('w-full')
                 threshold2 = ui.input('警戒浓度').classes('w-full')
                 threshold3 = ui.input('危险浓度').classes('w-full')
+                lc50 = ui.input('LC50(体积分数)/10^-6').classes('w-full')
 
             with ui.row():
                 ui.button('取消', on_click=dialog.close)
@@ -208,13 +211,14 @@ class GasManagementUI:
                         'CAS号': cas_no.value,
                         '分子量': mol_weight.value,
                         '毒性等级': toxicity.value,
-                        '沸点_C': boiling_pt.value,
-                        '熔点_C': melting_pt.value,
+                        '沸点': boiling_pt.value,
+                        '熔点': melting_pt.value,
                         'IDLH浓度': idlh.value,
                         'MAC浓度': mac.value,
                         '安全阈值': threshold1.value,
                         '警戒浓度': threshold2.value,
                         '危险浓度': threshold3.value,
+                        'LC50': lc50.value,
                     },
                     dialog
                 ))
@@ -229,27 +233,30 @@ class GasManagementUI:
             self.update_table()
             self.update_stats()
             ui.notify(f"成功添加气体: {gas_data['气体名称']}")
+        else:
+            ui.notify("添加失败，请检查必填项（名称/分子式/CAS号/毒性等级）是否完整或CAS号重复",
+                      type='negative')
 
-    def on_delete_gas(self, formula):
+    def on_delete_gas(self, cas_no):
         """删除气体"""
         with ui.dialog() as dialog, ui.card():
-            ui.label(f'确认删除气体: {formula}?').classes('text-h6')
+            ui.label(f'确认删除气体 (CAS号: {cas_no})?').classes('text-h6')
 
             with ui.row():
                 ui.button('取消', on_click=dialog.close)
                 ui.button('确认删除',
-                          on_click=lambda: self.delete_gas_and_refresh(formula, dialog))
+                          on_click=lambda: self.delete_gas_and_refresh(cas_no, dialog))
 
         dialog.open()
 
-    def delete_gas_and_refresh(self, formula, dialog):
+    def delete_gas_and_refresh(self, cas_no, dialog):
         """删除气体并刷新"""
-        if gas_db.delete_gas(formula):
+        if gas_db.delete_gas(cas_no):
             dialog.close()
             self.refresh_data()
             self.update_table()
             self.update_stats()
-            ui.notify(f"成功删除气体: {formula}")
+            ui.notify(f"成功删除气体: {cas_no}")
 
     def update_table(self):
         """更新表格显示"""
@@ -258,8 +265,8 @@ class GasManagementUI:
             display_df = self.current_df.copy()
             columns_to_show = [
                 '气体名称', '分子式', 'CAS号', '分子量', '毒性等级',
-                '沸点_C', '熔点_C', 'IDLH浓度', 'MAC浓度',
-                '安全阈值', '警戒浓度', '危险浓度'
+                '沸点', '熔点', 'IDLH浓度', 'MAC浓度',
+                '安全阈值', '警戒浓度', '危险浓度', 'LC50'
             ]
 
             # 确保列存在
@@ -267,14 +274,14 @@ class GasManagementUI:
                 col for col in columns_to_show if col in display_df.columns]
             display_df = display_df[available_columns]
 
-            # 重命名列显示
-            # display_df = display_df.rename(columns={
-            #     '沸点_C': '沸点(℃)',
-            #     '熔点_C': '熔点(℃)'
-            # })
+            _allow_delete = permission_manager.check_permission(
+                user_service.get_user_by_id(app.storage.user['id']), 'delete_content')
+            rows = display_df.to_dict('records')
+            for row in rows:
+                row['actions'] = f"delete_{row['CAS号']}" if _allow_delete else '--'
 
             # 更新表格
-            self.table.update_rows(display_df.to_dict('records'))
+            self.table.update_rows(rows)
         else:
             self.table.update_rows([])
 
@@ -334,11 +341,11 @@ class GasManagementUI:
 
             # 毒性等级过滤
             self.toxicity_select = ui.select(
-                ['', '高毒', '中毒', '低毒'],
+                [''] + self.toxicity_options,
                 label='毒性过滤',
                 value=self.toxicity_filter,
                 on_change=lambda e: setattr(self, 'toxicity_filter', e.value)
-            ).classes('w-32')
+            ).classes('w-36')
 
             # 搜索按钮
             ui.button('搜索', icon='search', on_click=self.on_search)
@@ -385,10 +392,10 @@ class GasManagementUI:
                             'field': '分子量', 'sortable': True},
                         {'name': '毒性等级', 'label': '毒性等级',
                             'field': '毒性等级', 'sortable': True},
-                        {'name': '沸点_C',
-                            'label': '沸点(℃)', 'field': '沸点_C', 'sortable': True},
-                        {'name': '熔点_C',
-                            'label': '熔点(℃)', 'field': '熔点_C', 'sortable': True},
+                        {'name': '沸点',
+                            'label': '沸点(℃)', 'field': '沸点', 'sortable': True},
+                        {'name': '熔点',
+                            'label': '熔点(℃)', 'field': '熔点', 'sortable': True},
                         {'name': 'IDLH浓度', 'label': 'IDLH浓度',
                             'field': 'IDLH浓度', 'sortable': True},
                         {'name': 'MAC浓度', 'label': 'MAC浓度',
@@ -399,6 +406,8 @@ class GasManagementUI:
                             'field': '警戒浓度', 'sortable': True},
                         {'name': '危险浓度', 'label': '危险浓度',
                             'field': '危险浓度', 'sortable': True},
+                        {'name': 'LC50', 'label': 'LC50(10⁻⁶)',
+                            'field': 'LC50', 'sortable': True},
                         {'name': 'actions', 'label': '操作', 'field': 'actions'}
                     ]
 
@@ -406,7 +415,7 @@ class GasManagementUI:
                         user_service.get_user_by_id(app.storage.user['id']), 'delete_content')
                     rows = display_df.to_dict('records')
                     for row in rows:
-                        row['actions'] = f"delete_{row['分子式']}" if _allow_delete else '--'
+                        row['actions'] = f"delete_{row['CAS号']}" if _allow_delete else '--'
 
                     self.table = ui.table(
                         columns=columns_to_show,
@@ -419,7 +428,7 @@ class GasManagementUI:
                         # 为每行添加删除按钮
                         self.table.add_slot('body-cell-actions', '''
                             <q-td :props="props">
-                                <q-btn @click="() => $parent.$emit('delete', props.row.分子式)"
+                                <q-btn @click="() => $parent.$emit('delete', props.row.CAS号)"
                                     icon="delete" size="sm" color="negative" flat dense />
                             </q-td>
                         ''')
@@ -435,9 +444,320 @@ class GasManagementUI:
         #     'text-caption')
 
 
-class ChemicalMagementUI:
+class ChemicalManagementUI:
     def __init__(self):
-        pass
+        self.current_df = None
+        self.search_condition = "化学品名称"
+        self.search_value = ""
+        self.hazard_filter = ""
+        self.sort_column = "化学品名称"
+        self.sort_ascending = True
+        self.hazard_options = chem_db.get_hazard_classes()
+        self.state_options = ['气态', '液态', '固态']
+
+        self.refresh_data()
+        self.create_ui()
+
+    def refresh_data(self):
+        """刷新数据"""
+        chemicals = chem_db.search_chemicals(
+            condition=self.search_condition if self.search_value else None,
+            value=self.search_value,
+            hazard_class=self.hazard_filter if self.hazard_filter else None
+        )
+
+        if chemicals:
+            self.current_df = pd.DataFrame(chemicals)
+            # 按列排序
+            self.current_df = self.current_df.sort_values(
+                by=self.sort_column,
+                ascending=self.sort_ascending
+            )
+        else:
+            self.current_df = pd.DataFrame()
+
+    def on_search(self):
+        """搜索按钮回调"""
+        self.refresh_data()
+        self.update_table()
+        self.update_stats()
+
+    def on_add_chemical(self):
+        """添加化学品对话框"""
+        with ui.dialog() as dialog, ui.card().style('width:720px; max-width:100%'):
+            ui.label('添加新化学品').classes('text-h6')
+
+            with ui.grid(columns=2).classes('w-full gap-x-6 gap-y-2'):
+                chem_name = ui.input('化学品名称').classes('w-full')
+                alias = ui.input('别名').classes('w-full')
+                formula = ui.input('分子式').classes('w-full')
+                cas_no = ui.input('CAS号').classes('w-full')
+                mol_weight = ui.number('分子量').classes('w-full')
+                hazard = ui.select(
+                    self.hazard_options,
+                    label='危险性类别',
+                    with_input=True
+                ).classes('w-full')
+                state = ui.select(
+                    self.state_options,
+                    label='物理状态',
+                    with_input=True
+                ).classes('w-full')
+                boiling_pt = ui.number('沸点(℃)').classes('w-full')
+                melting_pt = ui.number('熔点(℃)').classes('w-full')
+                flash_pt = ui.number('闪点(℃)').classes('w-full')
+                lel = ui.number('爆炸下限(%)').classes('w-full')
+                uel = ui.number('爆炸上限(%)').classes('w-full')
+                density = ui.number('相对密度').classes('w-full')
+                solubility = ui.input('溶解性').classes('w-full')
+                hazard_desc = ui.input('危险特性').classes('w-full')
+
+            with ui.row():
+                ui.button('取消', on_click=dialog.close)
+                ui.button('确认添加', on_click=lambda: self.add_chemical_and_refresh(
+                    {
+                        '化学品名称': chem_name.value,
+                        '别名': alias.value,
+                        '分子式': formula.value,
+                        'CAS号': cas_no.value,
+                        '分子量': mol_weight.value,
+                        '危险性类别': hazard.value,
+                        '物理状态': state.value,
+                        '沸点_C': boiling_pt.value,
+                        '熔点_C': melting_pt.value,
+                        '闪点_C': flash_pt.value,
+                        '爆炸下限': lel.value,
+                        '爆炸上限': uel.value,
+                        '相对密度': density.value,
+                        '溶解性': solubility.value,
+                        '危险特性': hazard_desc.value,
+                    },
+                    dialog
+                ))
+
+        dialog.open()
+
+    def add_chemical_and_refresh(self, chemical_data, dialog):
+        """添加化学品并刷新界面"""
+        if chem_db.add_chemical(chemical_data):
+            dialog.close()
+            self.refresh_data()
+            self.update_table()
+            self.update_stats()
+            ui.notify(f"成功添加化学品: {chemical_data['化学品名称']}")
+        else:
+            ui.notify(f"添加失败，请检查必填项（名称/分子式/CAS号/危险性类别）是否完整或重复",
+                      type='negative')
+
+    def on_delete_chemical(self, formula):
+        """删除化学品"""
+        with ui.dialog() as dialog, ui.card():
+            ui.label(f'确认删除化学品: {formula}?').classes('text-h6')
+
+            with ui.row():
+                ui.button('取消', on_click=dialog.close)
+                ui.button('确认删除',
+                          on_click=lambda: self.delete_chemical_and_refresh(formula, dialog))
+
+        dialog.open()
+
+    def delete_chemical_and_refresh(self, formula, dialog):
+        """删除化学品并刷新"""
+        if chem_db.delete_chemical(formula):
+            dialog.close()
+            self.refresh_data()
+            self.update_table()
+            self.update_stats()
+            ui.notify(f"成功删除化学品: {formula}")
+
+    def update_table(self):
+        """更新表格显示"""
+        if self.current_df is not None and not self.current_df.empty:
+            display_df = self.current_df.copy()
+            columns_to_show = [
+                '化学品名称', '别名', '分子式', 'CAS号', '分子量',
+                '危险性类别', '物理状态', '沸点_C', '熔点_C', '闪点_C',
+                '爆炸下限', '爆炸上限', '相对密度', '溶解性', '危险特性'
+            ]
+
+            # 确保列存在
+            available_columns = [
+                col for col in columns_to_show if col in display_df.columns]
+            display_df = display_df[available_columns]
+
+            _allow_delete = permission_manager.check_permission(
+                user_service.get_user_by_id(app.storage.user['id']), 'delete_content')
+            rows = display_df.to_dict('records')
+            for row in rows:
+                row['actions'] = f"delete_{row['分子式']}" if _allow_delete else '--'
+
+            self.table.update_rows(rows)
+        else:
+            self.table.update_rows([])
+
+    def update_stats(self):
+        """更新统计信息显示"""
+        stats = chem_db.get_statistics()
+
+        if stats:
+            stats_text = f"""
+            化学品总数: {stats.get('total_chemicals', 0)}
+            危险性类别分布: {', '.join([f'{k}:{v}' for k, v in stats.get(
+                'hazard_distribution', {}).items()])}
+            物理状态分布: {', '.join([f'{k}:{v}' for k, v in stats.get(
+                'state_distribution', {}).items()])}
+            平均分子量: {stats.get('avg_molecular_weight') or 0:.2f}
+            沸点范围: {stats.get('boiling_point_range', 'N/A')}
+            闪点范围: {stats.get('flash_point_range', 'N/A')}
+            """
+            self.stats_label.set_text(stats_text)
+        else:
+            self.stats_label.set_text("暂无统计数据")
+
+    def on_export_excel(self):
+        """导出到Excel"""
+        try:
+            chem_db.export_to_excel('chemical_export.xlsx')
+            ui.notify("数据已导出到 chemical_export.xlsx")
+        except Exception as e:
+            ui.notify(f"导出失败: {str(e)}", type='negative')
+
+    def on_sort(self, column):
+        """排序处理"""
+        if self.current_df is not None and column['column']['name'] in self.current_df.columns:
+            self.sort_column = column['column']['name']
+            self.sort_ascending = column['ascending']
+            self.refresh_data()
+            self.update_table()
+
+    def create_ui(self):
+        """创建UI界面"""
+        # 标题
+        ui.label('化学品管理').classes('text-h4 text-primary')
+
+        # 搜索和过滤区域
+        with ui.row().classes('items-center gap-4 w-full'):
+            # 搜索条件选择
+            self.search_condition_select = ui.select(
+                ['化学品名称', '别名', '分子式', 'CAS号', '危险性类别'],
+                label='搜索条件',
+                value=self.search_condition,
+                on_change=lambda e: setattr(self, 'search_condition', e.value)
+            ).classes('w-32')
+
+            # 搜索输入框
+            self.search_input = ui.input(
+                '搜索值',
+                value=self.search_value,
+                on_change=lambda e: setattr(self, 'search_value', e.value)
+            ).classes('w-48')
+
+            # 危险性类别过滤
+            self.hazard_select = ui.select(
+                [''] + self.hazard_options,
+                label='危险性过滤',
+                value=self.hazard_filter,
+                on_change=lambda e: setattr(self, 'hazard_filter', e.value)
+            ).classes('w-36')
+
+            # 搜索按钮
+            ui.button('搜索', icon='search', on_click=self.on_search)
+
+            # 重置按钮
+            ui.button('重置', icon='refresh',
+                      on_click=lambda: (setattr(self, 'search_value', ''),
+                                        setattr(self, 'hazard_filter', ''),
+                                        self.search_input.set_value(''),
+                                        self.hazard_select.set_value(''),
+                                        self.on_search())).props('flat')
+
+        # 操作按钮区域
+        if permission_manager.check_permission(user_service.get_user_by_id(app.storage.user['id']), 'edit_content'):
+            with ui.row().classes('gap-2'):
+                ui.button('添加化学品', icon='add', on_click=self.on_add_chemical).props(
+                    'color=positive')
+                # ui.button('导出Excel', icon='download',
+                #           on_click=self.on_export_excel)
+
+        # 统计信息卡片
+        with ui.card().classes('w-full'):
+            with ui.card_section():
+                ui.label('统计信息').classes('text-h6')
+                self.stats_label = ui.label()
+                self.update_stats()  # 初始显示统计信息
+
+        # 数据表格
+        with ui.card().classes('w-full'):
+            with ui.card_section():
+                ui.label('化学品数据表').classes('text-h6')
+
+                columns_to_show = [
+                    {'name': '化学品名称', 'label': '化学品名称',
+                        'field': '化学品名称', 'sortable': True},
+                    {'name': '别名', 'label': '别名',
+                        'field': '别名', 'sortable': True},
+                    {'name': '分子式', 'label': '分子式',
+                        'field': '分子式', 'sortable': True},
+                    {'name': 'CAS号', 'label': 'CAS号',
+                        'field': 'CAS号', 'sortable': True},
+                    {'name': '分子量', 'label': '分子量',
+                        'field': '分子量', 'sortable': True},
+                    {'name': '危险性类别', 'label': '危险性类别',
+                        'field': '危险性类别', 'sortable': True},
+                    {'name': '物理状态', 'label': '物理状态',
+                        'field': '物理状态', 'sortable': True},
+                    {'name': '沸点_C',
+                        'label': '沸点(℃)', 'field': '沸点_C', 'sortable': True},
+                    {'name': '熔点_C',
+                        'label': '熔点(℃)', 'field': '熔点_C', 'sortable': True},
+                    {'name': '闪点_C',
+                        'label': '闪点(℃)', 'field': '闪点_C', 'sortable': True},
+                    {'name': '爆炸下限', 'label': '爆炸下限(%)',
+                        'field': '爆炸下限', 'sortable': True},
+                    {'name': '爆炸上限', 'label': '爆炸上限(%)',
+                        'field': '爆炸上限', 'sortable': True},
+                    {'name': '相对密度', 'label': '相对密度',
+                        'field': '相对密度', 'sortable': True},
+                    {'name': '溶解性', 'label': '溶解性',
+                        'field': '溶解性', 'sortable': True},
+                    {'name': '危险特性', 'label': '危险特性',
+                        'field': '危险特性', 'sortable': True},
+                    {'name': 'actions', 'label': '操作', 'field': 'actions'}
+                ]
+
+                _allow_delete = permission_manager.check_permission(
+                    user_service.get_user_by_id(app.storage.user['id']), 'delete_content')
+
+                rows = []
+                if self.current_df is not None and not self.current_df.empty:
+                    display_df = self.current_df.copy()
+                    rows = display_df.to_dict('records')
+                    for row in rows:
+                        row['actions'] = f"delete_{row['分子式']}" if _allow_delete else '--'
+
+                self.table = ui.table(
+                    columns=columns_to_show,
+                    rows=rows,
+                    pagination={'rowsPerPage': 10},
+                    # on_sort=self.on_sort
+                ).classes('max-w-6xl overflow-x-auto')
+
+                if _allow_delete:
+                    # 为每行添加删除按钮
+                    self.table.add_slot('body-cell-actions', '''
+                        <q-td :props="props">
+                            <q-btn @click="() => $parent.$emit('delete', props.row.分子式)"
+                                icon="delete" size="sm" color="negative" flat dense />
+                        </q-td>
+                    ''')
+
+                    # 监听删除事件
+                    self.table.on(
+                        'delete', lambda e: self.on_delete_chemical(e.args))
+
+
+# 兼容脚手架中的旧类名拼写
+ChemicalMagementUI = ChemicalManagementUI
 
 
 @contextlib.contextmanager
@@ -694,7 +1014,7 @@ async def gas_explorer_page():
 async def chemical_explorer_page():
     with ui.card().classes('w-full shadow-lg rounded-lg').style('background:#fafafaa0'):
 
-        _ui = ChemicalMagementUI()
+        _ui = ChemicalManagementUI()
 
         # 分割线
         ui.separator().classes('my-4')
@@ -704,7 +1024,10 @@ async def chemical_explorer_page():
             ui.label('化学知识学习材料').classes('text-h6 font-semibold mb-3')
 
             websites = {
-                'web': 'https://.../',
+                'PubChem': 'https://pubchem.ncbi.nlm.nih.gov/',
+                'ChemicalBook': 'https://www.chemicalbook.com/',
+                'NIST Chemistry WebBook': 'https://webbook.nist.gov/chemistry/',
+                'GESTIS-Database': 'https://www.dguv.de/ifa/gestis/gestis-stoffdatenbank/index-2.jsp'
             }
 
             with ui.row().classes('gap-4'):
@@ -1322,6 +1645,8 @@ async def root():
                       on_click=lambda: ui.navigate.to('/sensors')).props('color=secondary')
             ui.button('气体数据库', icon='science',
                       on_click=lambda: ui.navigate.to('/gasExplorer')).props('color=accent')
+            ui.button('化学品数据库', icon='biotech',
+                      on_click=lambda: ui.navigate.to('/chemicalExplorer')).props('color=accent')
         else:
             ui.button('立即登录', icon='login',
                       on_click=lambda: ui.navigate.to('/login')).props('color=primary')
