@@ -41,7 +41,17 @@ from fds.simulate import (
     SPEC_ID_OPTIONS,
     guess_spec_id,
 )
-from hysplit.simulate import simulate_with_hysplit, get_hysplit_simulation_result_history, mk_hysplit_session
+from hysplit.simulate import (
+    simulate_with_hysplit,
+    get_hysplit_simulation_result,
+    get_hysplit_simulation_template,
+    list_hysplit_simulations,
+    resolve_met_file,
+    simulation_dir as hysplit_simulation_dir,
+    WEATHER_OPTIONS,
+    WIND_DIRECTIONS,
+    LOCATION_CANDIDATES,
+)
 
 # %%
 PROJECT = OmegaConf.load('conf/project.yml')
@@ -1837,42 +1847,47 @@ async def get_fds_simulation_template_page(session: str):
 # ---------------------------------------------------------------------------
 # hysplit
 @ui.page('/get_hysplit_simulation_result/{session}')
-async def get_hysplit_simulation_result(session: str):
-    dir = 'hysplit'
-    session_dir = Path(dir) / 'simulation' / session
-
-    if not session_dir.is_dir():
-        return HTMLResponse(json.dumps([]), media_type='application/json')
-
-    files = list(session_dir.iterdir()) if session_dir.is_dir() else []
-
-    img_dir = session_dir / 'img'
-    if img_dir.is_dir():
-        files.extend(list(img_dir.iterdir()))
-
-    obj = {'files': [str(f.name) for f in files]}
-    return HTMLResponse(json.dumps(obj), media_type='application/json')
+async def get_hysplit_simulation_result_page(session: str):
+    """一次模拟的完整状态：status / frames / environment / config。"""
+    obj = get_hysplit_simulation_result(session)
+    return HTMLResponse(json.dumps(obj, ensure_ascii=False),
+                        media_type='application/json')
 
 
 @ui.page('/get_hysplit_simulation_frame')
-async def get_hysplit_simulation_frame(session: str, frame: str):
-    dir = 'hysplit'
-    p = Path(dir) / 'simulation' / session / 'img' / frame
+async def get_hysplit_simulation_frame_page(session: str, frame: str):
+    if any(e in frame for e in ('/', '\\', '..')):
+        return HTMLResponse('Bad request', status_code=400)
+    try:
+        p = hysplit_simulation_dir(session) / 'img' / frame
+    except ValueError:
+        return HTMLResponse('Bad request', status_code=400)
     if not p.is_file():
         return HTMLResponse('File not found', status_code=404)
     return FileResponse(p, media_type='image/png')
 
 
 @ui.page('/get_hysplit_simulation_table_json')
-async def get_hysplit_simulation_table_json(session: str):
-    dir = 'hysplit'
-    p = Path(dir) / 'simulation' / session / 'table.json'
+async def get_hysplit_simulation_table_json_page(session: str):
+    try:
+        p = hysplit_simulation_dir(session) / 'table.json'
+    except ValueError:
+        return HTMLResponse(json.dumps({}), media_type='application/json')
 
     if not p.is_file():
         return HTMLResponse(json.dumps({}), media_type='application/json')
 
-    obj = json.load(open(p))
+    obj = json.loads(p.read_text(encoding='utf-8'))
     return HTMLResponse(json.dumps(obj), media_type='application/json')
+
+
+@ui.page('/get_hysplit_simulation_template')
+async def get_hysplit_simulation_template_page(session: str):
+    """把该次模拟实际用的 CONTROL 传回去（前端可查看原文）。"""
+    text = get_hysplit_simulation_template(session)
+    if not text:
+        return HTMLResponse('Not found', status_code=404)
+    return HTMLResponse(text, media_type='text/plain; charset=utf-8')
 
 # ---------------------------------------------------------------------------
 
@@ -2011,7 +2026,6 @@ async def simulation_page_fds():
     # ---- 卡片布局 ----
     with ui.row().classes('w-full justify-center items-start gap-4'):
         with ui.column().classes('w-[240px] gap-2'):
-            weather_card = ui.card().classes('w-full p-4 shadow-lg')
             mesh_card = ui.card().classes('w-full p-4 shadow-lg')
         map_card = ui.card().classes('w-[820px] h-[820px] p-0 m-0')
         gas_card = ui.card().classes('w-[320px] p-4 shadow-lg')
@@ -2020,39 +2034,8 @@ async def simulation_page_fds():
         device_card = ui.card().classes('w-[700px] p-4 shadow-lg')
         obstacle_card = ui.card().classes('w-[700px] p-4 shadow-lg')
 
-    # ---- 地理 / 气象 ----
-    geo_candidates = {
-        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
-        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
-        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 4},
-        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 4},
-    }
-    default_zoom = 4
-
-    with weather_card:
-        ui.label('地理位置').classes('text-h6 mb-2')
-        location_select = ui.select(
-            options=list(geo_candidates.keys()),
-            value='北京',
-            label='选择地点').classes('w-full').props('dense outlined')
-        zoom_input = ui.number(
-            value=default_zoom, min=1, max=20, step=1, precision=0,
-            label='地图缩放级别').classes('w-full').props('dense outlined')
-
-        ui.separator().classes('my-2')
-        ui.label('气象条件').classes('text-h6 mb-2')
-        weather_conditions = ui.select(
-            options=['晴', '多云', '阴', '雨', '雪', '雾'],
-            value='晴', label='天气状况').classes('w-full').props('dense outlined')
-        temperature = ui.number(label='温度(℃)', value=20, min=-50, max=50
-                                ).classes('w-full').props('dense outlined')
-        humidity = ui.number(label='湿度(%)', value=50, min=0, max=100
-                             ).classes('w-full').props('dense outlined')
-        wind_speed = ui.number(label='风力(级)', value=3, min=0, max=12
-                               ).classes('w-full').props('dense outlined')
-        wind_direction = ui.select(
-            options=['北', '东北', '东', '东南', '南', '西南', '西', '西北'],
-            value='东', label='风向').classes('w-full').props('dense outlined')
+    # FDS 是室内房间尺度模拟：房间几何全部由 IJK / XB / DEVC / OBST 决定，
+    # 既不读地理坐标也不读气象条件，所以这里没有任何地理或天气输入。
 
     # ---- 计算域与网格 ----
     with mesh_card:
@@ -2236,12 +2219,15 @@ async def simulation_page_fds():
 @ui.page('/simulationHysplit')
 @with_layout_full_width
 async def simulation_page_hysplit():
-    with ui.row().classes('w-[1200px] justify-center flex items-end'):
+    with ui.row().classes('w-[1200px] justify-center items-end gap-2'):
         simulate_button = ui.button(
             '开始拉格朗日模型计算', icon='play_arrow').props('color=primary')
 
         simulation_history_select = ui.select(
-            options=[], label='载入历史模拟').classes('w-64')
+            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+        refresh_history_button = ui.button('刷新历史', icon='refresh').props(
+            'flat dense')
+        status_label = ui.label('').classes('text-sm text-gray-600')
 
     # Layout
     with ui.row().classes('w-full justify-center gap-4'):
@@ -2250,21 +2236,62 @@ async def simulation_page_hysplit():
         gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
 
     # Simulation history
-    def on_select_session(e):
-        session = e.value
-        update_map(session=session)
+    def refresh_status(session='???'):
+        """把该会话的状态 / 帧数 / 备注显示到标签上。"""
+        if not session or session == '???':
+            status_label.text = ''
+            return
+        info = get_hysplit_simulation_result(session)
+        mapping = {'success': '完成', 'failed': '失败', 'pending': '计算中'}
+        note = (info.get('note') or '').replace('\n', ' · ')
+        status_label.text = (
+            f"{session} · {mapping.get(info['status'], info['status'])}"
+            f" · {info['n_frames']} 帧" + (f" · {note}" if note else ''))
 
-    # simulation_history = get_fds_simulation_result_history()
+    def on_select_session(e):
+        if e.value:
+            update_map(session=e.value)
+            refresh_status(e.value)
+
+    def session_options():
+        mapping = {'success': '完成', 'failed': '失败', 'pending': '计算中'}
+        options = {}
+        for entry in list_hysplit_simulations():
+            state = mapping.get(entry['status'], entry['status'])
+            options[entry['session']] = (
+                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧")
+        return options
+
     def update_simulation_history():
-        simulation_history = get_hysplit_simulation_result_history()
-        print(simulation_history)
-        simulation_history_select.options = [e for e in simulation_history]
+        simulation_history_select.options = session_options()
         simulation_history_select.update()
 
     update_simulation_history()
     simulation_history_select.on_value_change(on_select_session)
 
+    def on_refresh_history():
+        update_simulation_history()
+        refresh_status(simulation_history_select.value)
+
+    refresh_history_button.on('click', on_refresh_history)
+
     # Simulate button action
+    def collect_config():
+        """收集界面参数。气象部分对计算结果没有影响，随运行存档。"""
+        return {
+            'location': location_select.value,
+            'weather': weather_conditions.value,
+            'temperature': float(temperature.value or 0),
+            'humidity': float(humidity.value or 0),
+            'wind_speed': float(wind_speed.value or 0),
+            'wind_direction': wind_direction.value,
+            'year': int(year_input.value or 0),
+            'month': int(month_input.value or 0),
+            'day': int(day_input.value or 0),
+            'start_hour': int(start_hour_input.value or 0),
+            'duration_hours': int(duration_input.value or 0),
+        }
+
     def on_click():
         reader = SensorDataReader()
         sensors = reader.get_sensor_info()
@@ -2274,37 +2301,30 @@ async def simulation_page_hysplit():
             except:
                 pass
 
-        session = mk_hysplit_session()
-        simulate_with_hysplit(sensors, session)
+        session = simulate_with_hysplit(sensors, config=collect_config())
         update_map(session=session)
         update_simulation_history()
+        refresh_status(session)
 
         ui.notify(
-            f'Simulation finished. Session ID: {session}', color='positive')
+            f'模拟已在后台开始，Session: {session}', color='positive')
 
     simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
-    geo_candidates = {
-        '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
-        '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
-        '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 4},
-        '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 4},
-    }
+    geo_candidates = LOCATION_CANDIDATES
     default_zoom = 4
 
-    # 左侧天气信息输入
+    # 左侧：地理 / 气象 / 计算设置
     with weather_card:
         ui.label('地理位置').classes('text-h6 mb-4')
 
-        # 创建下拉选择框
         location_select = ui.select(
             options=list(geo_candidates.keys()),
             value='北京',
             label='选择地点'
-        ).classes('w-40')
+        ).classes('w-full')
 
-        # 创建数字输入框
         zoom_input = ui.number(
             value=default_zoom,
             min=1,
@@ -2312,42 +2332,69 @@ async def simulation_page_hysplit():
             step=1,
             precision=0,
             label='地图缩放级别'
-        ).classes('w-24')
+        ).classes('w-full')
 
         ui.label('气象条件').classes('text-h6 mb-4')
 
         weather_conditions = ui.select(
-            options=['晴', '多云', '阴', '雨', '雪', '雾'],
-            value='晴',
+            options=WEATHER_OPTIONS, value='晴',
             label='天气状况'
-        ).classes('w-full mb-4')
+        ).classes('w-full mb-2')
 
         temperature = ui.number(
-            label='温度(℃)',
-            value=20,
-            min=-50,
-            max=50
-        ).classes('w-full mb-4')
+            label='温度(℃)', value=20, min=-50, max=50
+        ).classes('w-full mb-2')
 
         humidity = ui.number(
-            label='湿度(%)',
-            value=50,
-            min=0,
-            max=100
-        ).classes('w-full mb-4')
+            label='湿度(%)', value=50, min=0, max=100
+        ).classes('w-full mb-2')
 
         wind_speed = ui.number(
-            label='风力(级)',
-            value=3,
-            min=0,
-            max=12
-        ).classes('w-full mb-4')
+            label='风力(级)', value=3, min=0, max=12
+        ).classes('w-full mb-2')
 
         wind_direction = ui.select(
-            options=['北', '东北', '东', '东南', '南', '西南', '西', '西北'],
-            value='东',
+            options=WIND_DIRECTIONS, value='东',
             label='风向'
         ).classes('w-full')
+
+        # ---- 真正决定计算的参数 ----
+        ui.label('计算设置').classes('text-h6 mt-4 mb-2')
+        with ui.grid(columns=2).classes('w-full gap-1'):
+            year_input = ui.number(
+                '年', value=2024, min=1900, max=2100, step=1, precision=0
+            ).props('dense outlined')
+            month_input = ui.number(
+                '月', value=5, min=1, max=12, step=1, precision=0
+            ).props('dense outlined')
+            day_input = ui.number(
+                '日', value=2, min=1, max=31, step=1, precision=0
+            ).props('dense outlined')
+            start_hour_input = ui.number(
+                '起始时', value=0, min=0, max=23, step=1, precision=0
+            ).props('dense outlined')
+
+        duration_input = ui.number(
+            '模拟时长 (h)', value=24, min=1, max=240, step=1, precision=0
+        ).classes('w-full mt-1').props('dense outlined')
+
+        met_label = ui.label('').classes('text-xs text-gray-500 mt-2')
+
+        def show_met_file():
+            """实时显示该日期会用到哪个 gdas1 文件，找不到就提示。"""
+            try:
+                d, n = resolve_met_file(int(year_input.value or 0),
+                                        int(month_input.value or 0),
+                                        int(day_input.value or 0))
+            except Exception:
+                met_label.text = ''
+                return
+            met_label.text = (f'气象文件：{n}' if d is not None
+                              else f'⚠ 找不到气象文件 {n}，该日期无法计算')
+
+        for widget in (year_input, month_input, day_input):
+            widget.on_value_change(lambda e=None: show_met_file())
+        show_met_file()
 
     # 右侧气体信息显示
     with gas_card:

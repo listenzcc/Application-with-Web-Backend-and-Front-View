@@ -1,12 +1,33 @@
 from omegaconf.omegaconf import OmegaConf
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Load simulation.yml for hysplit setup
-conf = OmegaConf.load('./conf/simulation.yml')
-print(conf)
+# 项目根：python/hysplit/mk_control.py -> python/hysplit -> python -> <root>
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONF_PATH = PROJECT_ROOT / 'conf' / 'simulation.yml'
 
-weather_data_folder = conf['hysplit']['weatherData']
+MONTH_ABBR = ["jan", "feb", "mar", "apr", "may", "jun",
+              "jul", "aug", "sep", "oct", "nov", "dec"]
+
+
+def weather_data_folder() -> str:
+    """读取 conf/simulation.yml 里配置的气象数据目录。
+
+    改成惰性读取，避免 import 时就因为工作目录不对而炸掉；
+    取不到就返回空串，由调用方决定降级策略。
+    """
+    try:
+        conf = OmegaConf.load(CONF_PATH)
+        return str(conf['hysplit']['weatherData'])
+    except Exception:
+        return ''
+
+
+def met_file_name(year: int, month: int, day: int) -> str:
+    """按 HYSPLIT 的命名规则推出该日期所属的气象文件名，如 gdas1.may24.w1。"""
+    week_num = (day - 1) // 7 + 1
+    week_num = min(week_num, 5)  # 一周一个文件，一个月最多 5 个
+    return f"gdas1.{MONTH_ABBR[month-1]}{year % 100:02d}.w{week_num}"
 
 
 def mk_emitimes(points: list, year: int, month: int, day: int, hour: int, minute: int, duration_hours: int, duration_minutes: int):
@@ -39,13 +60,14 @@ def mk_emitimes(points: list, year: int, month: int, day: int, hour: int, minute
 
 
 def mk_control(points: list, year: int, month: int, day: int,
-               meteorology_dir: str = weather_data_folder,  # "E:/WeatherData/",
+               meteorology_dir: str = None,
                meteorology_files: list = None,
                start_hour: int = 0,
                duration_hours: int = -6,
                top_height: float = 10000.0,
                output_dir: str = "./",
                output_file: str = "cdump",
+               output_interval_minutes: int = 100,
                vertical_method: int = 0):
     """
     生成HYSPLIT CONTROL文件
@@ -133,14 +155,10 @@ def mk_control(points: list, year: int, month: int, day: int,
             lines.append(filename)
     else:
         # 使用默认气象文件命名规则
-        # 月份缩写
-        month_abbr = ["jan", "feb", "mar", "apr", "may", "jun",
-                      "jul", "aug", "sep", "oct", "nov", "dec"]
-        # 计算周数（基于1号开始）
-        week_num = (day - 1) // 7 + 1
-        week_num = min(week_num, 5)  # 最多5周
+        if meteorology_dir is None:
+            meteorology_dir = weather_data_folder()
 
-        meteorology_file = f"gdas1.{month_abbr[month-1]}{year % 100:02d}.w{week_num}"
+        meteorology_file = met_file_name(year, month, day)
 
         lines.append("1")  # 气象文件数量
         lines.append(meteorology_dir)
@@ -174,7 +192,7 @@ def mk_control(points: list, year: int, month: int, day: int,
         output_dir,           # 输出目录
         output_file,          # 输出文件名
         "1",                  # 输出时间平均选项
-        "100",                # 输出时间间隔（分钟）
+        f"{int(output_interval_minutes)}",   # 输出时间间隔（分钟）
         "00 00 00 00 00",     # 采样开始时间
         "00 00 00 00 00",     # 采样结束时间
         "00 01 00",           # 浓度网格设置
@@ -191,7 +209,7 @@ def mk_control(points: list, year: int, month: int, day: int,
 
 def generate_meteorology_files_for_period(start_datetime: datetime,
                                           duration_hours: int,
-                                          base_dir: str = weather_data_folder  # "E:/WeatherData/"
+                                          base_dir: str = None
                                           ):
     """
     根据模拟时段自动生成所需的气象文件列表
@@ -210,8 +228,8 @@ def generate_meteorology_files_for_period(start_datetime: datetime,
     list : 气象文件列表 [(路径, 文件名), ...]
     """
 
-    month_abbr = ["jan", "feb", "mar", "apr", "may", "jun",
-                  "jul", "aug", "sep", "oct", "nov", "dec"]
+    if base_dir is None:
+        base_dir = weather_data_folder()
 
     # 计算结束时间
     if duration_hours < 0:  # 后向轨迹
@@ -229,15 +247,8 @@ def generate_meteorology_files_for_period(start_datetime: datetime,
     current_date = start_datetime
 
     while current_date <= end_datetime:
-        year_short = current_date.year % 100
-        month = current_date.month
-        day = current_date.day
-
-        # 计算周数（基于1号开始）
-        week_num = (day - 1) // 7 + 1
-        week_num = min(week_num, 5)  # 最多5周
-
-        filename = f"gdas1.{month_abbr[month-1]}{year_short:02d}.w{week_num}"
+        filename = met_file_name(
+            current_date.year, current_date.month, current_date.day)
         files_needed.append((base_dir, filename))
 
         # 移动到下一周

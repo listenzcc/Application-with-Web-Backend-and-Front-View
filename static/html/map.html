@@ -3,23 +3,22 @@
 
 <head>
     <meta charset="utf-8">
-    <title>Guides</title>
+    <title>HYSPLIT 模拟</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
 
-    <!-- 加载 mapbox-gl 库 -->
-    <!-- <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.css" rel="stylesheet"> -->
-    <!-- <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0-beta.1/mapbox-gl.js"></script> -->
     <link href="/static/src/mapbox-gl.css" rel="stylesheet">
     <script src="/static/src/mapbox-gl.js"></script>
     <script src="/static/secret/config.js"></script>
-
-    <!-- 加载整个 Turf.js 库 -->
-    <!-- <script src='https://unpkg.com/@turf/turf@7/turf.min.js'></script> -->
     <script src="/static/src/turf.min.js"></script>
+
     <style>
+        html,
         body {
             margin: 0;
             padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, "Microsoft YaHei", Arial, sans-serif;
         }
 
         #map {
@@ -35,22 +34,134 @@
             pointer-events: none;
         }
 
-        #runningDiv {
-            font-size: small;
-            color: brown;
-            display: block;
+        #hud {
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            z-index: 500;
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #222;
         }
 
-        #frameSelectionSpan {
-            font-size: small;
-            color: white;
-            background-color: #0003;
+        #statusLine {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
         }
 
-        ol {
-            max-height: 400px;
-            overflow-y: scroll;
-            overflow-x: clip;
+        #hudRow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        #frameRange {
+            flex: 1 1 220px;
+            min-width: 140px;
+        }
+
+        #frameLabel {
+            font-variant-numeric: tabular-nums;
+            min-width: 120px;
+            display: inline-block;
+        }
+
+        #runningSpan {
+            color: #8d6e00;
+        }
+
+        .btn {
+            border: 1px solid #bbb;
+            background: #fafafa;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn:hover {
+            background: #f0f0f0;
+        }
+
+        .btn:disabled {
+            opacity: .5;
+            cursor: default;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: #eee;
+            color: #333;
+        }
+
+        .tag.success {
+            background: #e6f4ea;
+            color: #1b5e20;
+        }
+
+        .tag.failed {
+            background: #fdecea;
+            color: #b71c1c;
+        }
+
+        .tag.pending {
+            background: #fff8e1;
+            color: #8d6e00;
+        }
+
+        #legendLine {
+            margin-top: 6px;
+            color: #555;
+        }
+
+        .swatch {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            vertical-align: -1px;
+            margin-right: 3px;
+            margin-left: 8px;
+        }
+
+        #progressBox {
+            display: none;
+            max-height: 110px;
+            overflow: auto;
+            border-top: 1px dashed #ddd;
+            margin-top: 6px;
+            padding-top: 4px;
+            color: #666;
+        }
+
+        #progressBox ol {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        #templateBox {
+            display: none;
+            max-height: 220px;
+            overflow: auto;
+            margin-top: 6px;
+            background: #1e1e1e;
+            color: #d8d8d8;
+            border-radius: 4px;
+            padding: 6px;
+            white-space: pre;
+            font-family: Consolas, monospace;
+            font-size: 11px;
         }
     </style>
 </head>
@@ -58,23 +169,33 @@
 <body>
     <div>
         <div id="map"></div>
-        <div id="overlap" class="click-through" style="z-index:100; position: fixed">
-        </div>
-        <div id="simulation" class="click-through" style="z-index:200; position: fixed">
-        </div>
+        <div id="overlap" class="click-through" style="z-index:100; position: fixed"></div>
+        <div id="simulation" class="click-through" style="z-index:200; position: fixed"></div>
     </div>
 
-    <!-- Options for session frames -->
-    <div style="z-index: 200; position: absolute">
-        <!-- Options for session frames -->
-        <span id="frameSelectionSpan" style="position: fixed; right: 0"></span>
-        <select id="frameSelection" style="display:none">
-        </select>
-        <div id="runningDiv">
-            <span id="runningDivSpan"></span>
-            <ol id="runningDivOl">
-            </ol>
+    <div id="hud">
+        <div id="statusLine">
+            <span id="sessionTag" class="tag">会话</span>
+            <span id="statusTag" class="tag">—</span>
+            <span id="frameLabel">— / —</span>
+            <span id="runningSpan"></span>
         </div>
+        <div id="hudRow">
+            <button id="playBtn" class="btn" title="播放 / 暂停" disabled>▶ 播放</button>
+            <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
+            <button id="templateBtn" class="btn" title="查看本次实际使用的 CONTROL">查看 CONTROL</button>
+        </div>
+        <div id="legendLine">
+            浓度
+            <span class="swatch" style="background:#FDE725"></span>高
+            <span class="swatch" style="background:#22A884"></span>
+            <span class="swatch" style="background:#440154"></span>低
+            <span id="scaleText"></span>
+        </div>
+        <div id="progressBox">
+            <ol id="progressList"></ol>
+        </div>
+        <pre id="templateBox"></pre>
     </div>
 
     <script>
@@ -83,601 +204,412 @@
 
     <script>
         const sessionStr = "{{session}}";
-        const sessionApiUrl = `/get_hysplit_simulation_result/${sessionStr}`;
-        const geoLimitsUrl = `/get_hysplit_simulation_table_json/?session=${sessionStr}`;
-        const sessionFrameApiUrl = (frame) => {
-            return `/get_hysplit_simulation_frame?session=${sessionStr}&frame=${frame}`;//&_=${new Date().getTime()}`;
+        const resultApiUrl = `/get_hysplit_simulation_result/${encodeURIComponent(sessionStr)}`;
+        const frameApiUrl = (frame) => `/get_hysplit_simulation_frame?session=${encodeURIComponent(sessionStr)}&frame=${encodeURIComponent(frame)}`;
+        const tableApiUrl = `/get_hysplit_simulation_table_json?session=${encodeURIComponent(sessionStr)}`;
+        const templateApiUrl = `/get_hysplit_simulation_template?session=${encodeURIComponent(sessionStr)}`;
+
+        const $ = (id) => document.getElementById(id);
+
+        // 时间轴 / 状态。frames.json 是唯一数据源，不再去点 .png 文件
+        const state = {
+            frames: [],
+            index: 0,
+            playing: false,
+            timer: null,
+            status: 'pending',
+            mapReady: false,
+            table: null,       // table.json 缓存，拖动滑块时不再重复请求
+            vMin: 0,
+            vMax: 5,
+            releaseDrawn: false,
+        };
+
+        function setStatus(status, note) {
+            state.status = status;
+            const mapping = { success: '完成', failed: '失败', pending: '计算中', missing: '无数据' };
+            const tag = $('statusTag');
+            tag.textContent = mapping[status] || status;
+            tag.className = 'tag ' + (status === 'pending' ? 'pending' : status);
+            tag.title = note || '';
+            $('sessionTag').textContent = sessionStr === '???' ? '未选择会话' : sessionStr;
+        }
+
+        function setFrameLabel() {
+            const n = state.frames.length;
+            if (!n) {
+                $('frameLabel').textContent = '— / —';
+                return;
+            }
+            const f = state.frames[state.index];
+            $('frameLabel').textContent = `${f.label || f.file}   (${state.index + 1}/${n})`;
         }
 
         /**
-         * 定时检查模拟结果是否生成完成
+         * 拉一次结果接口，更新状态与时间轴。
+         * 还在算就继续轮询，算完就解锁滑块。
          */
-        function timelyCheck() {
-            const response = fetch(sessionApiUrl);
-            response.then(async (response) => {
-                if (!response.ok) {
-                    throw new Error(`HTTP错误(timelyCheck): ${response.status}`);
-                }
+        async function refresh() {
+            let resp;
+            try {
+                const r = await fetch(resultApiUrl);
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                resp = await r.json();
+            } catch (e) {
+                setStatus('failed', String(e));
+                return;
+            }
 
-                const resp = await response.json();
-                console.log(resp)
+            setStatus(resp.status, resp.note);
+            state.vMin = (resp.v_min === null || resp.v_min === undefined) ? 0 : resp.v_min;
+            state.vMax = (resp.v_max === null || resp.v_max === undefined) ? 5 : resp.v_max;
+            $('scaleText').textContent = `log10 相对值 ${Number(state.vMin).toFixed(2)} ~ ${Number(state.vMax).toFixed(2)}`;
 
-                // Update runningDivOl
-                runningDivOl.innerHTML = ''
-                resp.files.map(f => {
-                    let li = document.createElement('li')
-                    li.innerText = f
-                    runningDivOl.appendChild(li)
-                })
-                runningDivSpan.innerHTML = "模拟正在进行，请稍候 (session={{session}})"
+            if (resp.status === 'pending') {
+                $('runningSpan').textContent = resp.exists ? '模拟正在计算，请稍候…' : '尚未开始';
+                $('progressBox').style.display = 'block';
+                const ol = $('progressList');
+                ol.innerHTML = '';
+                (resp.files || []).forEach(f => {
+                    const li = document.createElement('li');
+                    li.textContent = f;
+                    ol.appendChild(li);
+                });
+                setTimeout(refresh, 1500);
+                return;
+            }
 
-                // 如果生成结果中不包含 'table.json'，则继续定时检查
-                if (!resp.files.includes('table.json')) {
-                    setTimeout(timelyCheck, 1000);
-                } else {
-                    // 结果生成完成，填充下拉选项
-                    resp.files.forEach(file => {
-                        if (file.endsWith('.png')) {
-                            const option = document.createElement('option');
-                            option.value = file;
-                            option.text = file;
-                            frameSelection.appendChild(option);
-                        }
-                    });
+            $('runningSpan').textContent = '';
+            $('progressBox').style.display = 'none';
 
-                    // Update running div and frameSelection stuff
-                    runningDiv.style.display = 'none';
-                    frameSelection.style.display = 'block';
-                    frameSelectionSpan.innerHTML = '{{session}}';
+            const frames = resp.frames || [];
+            if (frames.length !== state.frames.length ||
+                (frames.length && state.frames.length && frames[0].file !== state.frames[0].file)) {
+                state.frames = frames;
+                const range = $('frameRange');
+                range.min = 0;
+                range.max = Math.max(0, frames.length - 1);
+                range.value = 0;
+                state.index = 0;
+            }
 
-                }
+            const has = frames.length > 0;
+            $('frameRange').disabled = !has;
+            $('playBtn').disabled = !has;
+            setFrameLabel();
 
-            });
+            drawEnvMarkers(resp.environment);
+            if (has && state.mapReady) drawFrame();
         }
-        timelyCheck();
+
+        /** 帧列表 / 滑块拖动 */
+        function onFrameInput() {
+            state.index = parseInt($('frameRange').value, 10) || 0;
+            setFrameLabel();
+            drawFrame();
+        }
+
+        function togglePlay() {
+            if (state.playing) {
+                state.playing = false;
+                clearInterval(state.timer);
+                $('playBtn').textContent = '▶ 播放';
+                return;
+            }
+            if (state.frames.length < 2) return;
+            state.playing = true;
+            $('playBtn').textContent = '❚❚ 暂停';
+            state.timer = setInterval(() => {
+                state.index = (state.index + 1) % state.frames.length;
+                $('frameRange').value = state.index;
+                setFrameLabel();
+                drawFrame();
+            }, 700);
+        }
+
+        /** 在图上标出释放点（来自 environment.release_points） */
+        function drawEnvMarkers(env) {
+            if (!env || !env.release_points || state.releaseDrawn) return;
+            env.release_points.forEach(p => {
+                const el = document.createElement('div');
+                el.style.cssText = 'width:10px;height:10px;border-radius:50%;' +
+                    'background:#D85A30;border:2px solid #fff;box-shadow:0 0 3px #0006;';
+                el.title = `${p.sensor_id || 'release'}  ${p.mass}`;
+                new mapboxgl.Marker({ element: el })
+                    .setLngLat([p.lon, p.lat])
+                    .addTo(map);
+            });
+            state.releaseDrawn = true;
+        }
     </script>
 
     <script>
         mapboxgl.accessToken = MAPBOX_CONFIG.accessToken;
         const map = new mapboxgl.Map({
             container: 'map',
-            // style: 'mapbox://styles/mapbox/standard',
-            // Use my own mapbox key
             style: MAPBOX_CONFIG.styleId,
             projection: 'globe',
             zoom: "{{zoom}}",
-            // center: [116.3912757, 39.906217] // 经度，纬度
-            center: ["{{lon}}", "{{lat}}"] // 经度，纬度
+            center: ["{{lon}}", "{{lat}}"]
         });
 
         const mapMarkers = {};
 
-        console.log(`Simulation session: ${sessionStr}`);
-
         map.addControl(new mapboxgl.NavigationControl());
-        // map.scrollZoom.disable();
 
         map.on('style.load', () => {
             map.setFog({});
         });
 
-        // Create and setup canvas after map loads
         map.on('load', () => {
             setupCanvasOverlay();
             setupCanvasOverlay1();
             setupSimulationOverlay();
+            state.mapReady = true;
+
+            $('frameRange').addEventListener('input', onFrameInput);
+            $('playBtn').addEventListener('click', togglePlay);
+            $('templateBtn').addEventListener('click', async () => {
+                const box = $('templateBox');
+                if (box.style.display === 'block') {
+                    box.style.display = 'none';
+                    return;
+                }
+                try {
+                    const r = await fetch(templateApiUrl);
+                    box.textContent = r.ok ? await r.text() : '（没有读到 CONTROL）';
+                } catch (e) {
+                    box.textContent = String(e);
+                }
+                box.style.display = 'block';
+            });
+
+            refresh();
         });
 
         /**
-         * 设置覆盖在地图上的模拟仿真Canvas
+         * 模拟浓度叠加层。帧数据来自 frames.json，
+         * 拖动滑块直接换帧，不需要再去列目录点 png。
          */
         function setupSimulationOverlay() {
-            // Similar to setupCanvasOverlay, but for simulation overlay
             const simulationDiv = document.getElementById('simulation');
-            simulationDiv.innerHTML = ''; // Clear previous content
+            simulationDiv.innerHTML = '';
             const mapDiv = document.getElementById('map');
-            // Create canvas element
+
             const canvas = document.createElement('canvas');
             canvas.id = 'simulationCanvas';
             simulationDiv.appendChild(canvas);
-            // Get canvas context
             const ctx = canvas.getContext('2d');
 
-            // Set canvas dimensions to match the container
             function resizeCanvas() {
                 canvas.width = mapDiv.offsetWidth;
                 canvas.height = mapDiv.offsetHeight;
-                drawOnCanvas();
             }
 
-            // Initial resize
             resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+        }
 
-            frameSelection.onchange = () => {
-                // 触发simulation overlay的更新
-                drawOnCanvas();
-            };
+        async function loadTable() {
+            if (state.table) return state.table;
+            const r = await fetch(tableApiUrl);
+            state.table = await r.json();
+            return state.table;
+        }
 
-            function drawOnCanvas() {
-                // Clear canvas
-                // ctx.clearRect(0, 0, canvas.width, canvas.height);
-                const frame = document.getElementById('frameSelection').value,
-                    day = parseInt(frame.slice(0, 3)),
-                    hr = parseInt(frame.slice(4, 6));
-                console.log(frame, day, hr)
+        /** 把当前帧画到地图上 */
+        async function drawFrame() {
+            const frame = state.frames[state.index];
+            if (!frame) return;
 
-                if (true) {
-                    const response1 = fetch(geoLimitsUrl)
-                    response1.then(async (response) => {
-                        const resp = await response.json();
-                        const points = []
-                        for (let i in resp['LON']) {
-                            if (day !== resp['DAY'][i] | hr !== resp['HR'][i]) continue
-                            points.push({ lon: resp['LON'][i], lat: resp['LAT'][i], value: resp['m'][i] })
-                            // if (i > 100) break;
-                        }
-                        console.log(points)
-                        // 提取所有值
-                        const values = points.map(p => p.value);
-
-                        // 获取最小值和最大值
-                        const minValue = Math.min(...values);
-                        const maxValue = Math.max(...values);
-                        // 均匀分割成 5 个值（用于 isobands）
-                        const numIntervals = 5; // 需要 5 个分割点，实际会产生 4 个区间
-                        const breaks = [];
-
-                        for (let i = 0; i <= numIntervals; i++) {
-                            const value = minValue + (maxValue - minValue) * (i / numIntervals);
-                            breaks.push(parseFloat(value.toFixed(2))); // 保留两位小数
-                        }
-
-                        console.log('均匀分割的值:', breaks);
-                        console.log(`范围: ${minValue.toFixed(2)} 到 ${maxValue.toFixed(2)}`);
-                        console.log('生成的区间:', breaks.slice(0, -1).map((v, i) =>
-                            `${v.toFixed(2)} - ${breaks[i + 1].toFixed(2)}`
-                        ));
-
-                        // 转换为 Turf FeatureCollection
-                        const features = points.map(point =>
-                            turf.point([point.lon, point.lat], { value: point.value })
-                        );
-                        console.log(features)
-
-                        const featureCollection = turf.featureCollection(features);
-                        console.log(featureCollection)
-
-                        // 生成网格
-                        featureCollection.features.forEach(f => console.log(f.geometry.type));
-                        /*
-                        const grid = turf.interpolate(featureCollection, 0.1, {
-                            gridType: 'points',
-                            property: 'value',
-                            units: 'degrees'
-                        });
-                        console.log(grid)
-                        */
-
-                        // 移除旧图层
-                        if (map.getLayer('heatmap-layer')) {
-                            map.removeLayer('heatmap-layer');
-                        }
-                        if (map.getLayer('heatmap-layer-1')) {
-                            map.removeLayer('heatmap-layer-1');
-                        }
-
-                        // 移除旧源
-                        if (map.getSource('heatmap-points')) {
-                            map.removeSource('heatmap-points');
-                        }
-
-                        // 直接使用点数据创建热力图效果
-                        map.addSource('heatmap-points', {
-                            type: 'geojson',
-                            //data: grid
-                            data: featureCollection
-                        });
-
-                        const vmin = 0, vmax = 5;
-
-                        // 移除热力图图层，改用circle图层
-                        map.addLayer({
-                            id: 'heatmap-layer',
-                            type: 'circle',
-                            source: 'heatmap-points',
-                            paint: {
-                                // 半径根据值变化
-                                'circle-radius': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['get', 'value'],
-                                    vmin, 5,    // 最小值对应的半径
-                                    vmax, 30    // 最大值对应的半径
-                                ],
-                                // 颜色根据值变化
-                                'circle-color': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['get', 'value'],
-                                    vmin, '#440154',      // 最小值颜色
-                                    (vmin + vmax) * 0.25, '#414487',
-                                    (vmin + vmax) * 0.5, '#2A788E',
-                                    (vmin + vmax) * 0.75, '#22A884',
-                                    vmax, '#FDE725'       // 最大值颜色
-                                ],
-                                // 添加模糊效果，模拟热力图
-                                'circle-blur': 0.7,
-                                'circle-opacity': 0.5,
-                                // 根据缩放调整
-                                'circle-stroke-width': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['zoom'],
-                                    0, 0,
-                                    9, 1
-                                ],
-                                'circle-stroke-color': 'rgba(255,255,255,0.0)'
-                            }
-                        });
-
-
-                        // 热力图图层
-                        map.addLayer({
-                            id: 'heatmap-layer-1',
-                            type: 'heatmap',
-                            source: 'heatmap-points',
-                            paint: {
-                                // 热力图颜色渐变
-                                'heatmap-color': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['heatmap-density'],
-                                    0, 'rgba(68, 1, 84, 0)',
-                                    0.1, 'rgba(68, 1, 84, 50)',
-                                    0.2, '#440154',
-                                    0.4, '#414487',
-                                    0.6, '#2A788E',
-                                    0.8, '#22A884',
-                                    1, '#FDE725'
-                                ],
-                                // 调整热力图强度
-                                'heatmap-intensity': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['zoom'],
-                                    0, 1,
-                                    9, 3
-                                ],
-                                // 热力点半径
-                                'heatmap-radius': [
-                                    'interpolate',
-                                    ['linear'],
-                                    ['zoom'],
-                                    0, 2,
-                                    9, 20
-                                ],
-                                // 热力图不透明度
-                                'heatmap-opacity': 0.7
-                            }
-                        });
-
-                    })
-                }
+            let resp;
+            try {
+                resp = await loadTable();
+            } catch (e) {
+                console.warn('读取 table.json 失败', e);
+                return;
             }
+            if (!resp || !resp.LON) return;
+
+            const day = Number(frame.day);
+            const hr = Number(frame.hour);
+
+            // table.json 是 pandas 的 to_json 默认输出：列优先，
+            // 每列是一个以行号为键的对象，不是数组。所以只能用 for...in，
+            // 不能靠 resp.LON.length 去数长度。
+            const points = [];
+            for (const i in resp.LON) {
+                if (Number(resp.DAY[i]) !== day || Number(resp.HR[i]) !== hr) continue;
+                points.push({ lon: resp.LON[i], lat: resp.LAT[i], value: resp.m[i] });
+            }
+            if (!points.length) return;
+
+            const features = points.map(p =>
+                turf.point([p.lon, p.lat], { value: p.value }));
+            const featureCollection = turf.featureCollection(features);
+
+            // mapbox 的 interpolate 要求断点严格递增。
+            // 全帧同值（vmax == vmin）时必须兜一个区间出来，否则会报错。
+            let vmin = Number(state.vMin);
+            let vmax = Number(state.vMax);
+            if (!isFinite(vmin)) vmin = 0;
+            if (!isFinite(vmax) || vmax <= vmin) vmax = vmin + 1;
+            const span = vmax - vmin;
+
+            // 源和图层已经建好就只换数据，拖动滑块才不会闪
+            if (map.getSource('heatmap-points')) {
+                map.getSource('heatmap-points').setData(featureCollection);
+                return;
+            }
+
+            map.addSource('heatmap-points', { type: 'geojson', data: featureCollection });
+
+            map.addLayer({
+                id: 'heatmap-layer',
+                type: 'circle',
+                source: 'heatmap-points',
+                paint: {
+                    'circle-radius': [
+                        'interpolate', ['linear'], ['get', 'value'],
+                        vmin, 5,
+                        vmax, 30
+                    ],
+                    'circle-color': [
+                        'interpolate', ['linear'], ['get', 'value'],
+                        vmin, '#440154',
+                        vmin + span * 0.25, '#414487',
+                        vmin + span * 0.5, '#2A788E',
+                        vmin + span * 0.75, '#22A884',
+                        vmax, '#FDE725'
+                    ],
+                    'circle-blur': 0.7,
+                    'circle-opacity': 0.5,
+                    'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 0, 0, 9, 1],
+                    'circle-stroke-color': 'rgba(255,255,255,0.0)'
+                }
+            });
+
+            map.addLayer({
+                id: 'heatmap-layer-1',
+                type: 'heatmap',
+                source: 'heatmap-points',
+                paint: {
+                    'heatmap-color': [
+                        'interpolate', ['linear'], ['heatmap-density'],
+                        0, 'rgba(68, 1, 84, 0)',
+                        0.1, 'rgba(68, 1, 84, 50)',
+                        0.2, '#440154',
+                        0.4, '#414487',
+                        0.6, '#2A788E',
+                        0.8, '#22A884',
+                        1, '#FDE725'
+                    ],
+                    'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 9, 3],
+                    'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 2, 9, 20],
+                    'heatmap-opacity': 0.7
+                }
+            });
         }
 
         /**
-         * 设置覆盖在地图上的Canvas
+         * 传感器 canvas
          */
         function setupCanvasOverlay() {
             const overlapDiv = document.getElementById('overlap');
             const mapDiv = document.getElementById('map');
 
-            // Remove existing canvas if any
             const existingCanvas = overlapDiv.querySelector('canvas');
-            if (existingCanvas) {
-                existingCanvas.remove();
-            }
+            if (existingCanvas) existingCanvas.remove();
 
-            // Create canvas element
             const canvas = document.createElement('canvas');
             canvas.id = 'overlayCanvas';
             overlapDiv.appendChild(canvas);
-
-            // Get canvas context
             const ctx = canvas.getContext('2d');
 
-            // Set canvas dimensions to match the container
             function resizeCanvas() {
                 canvas.width = mapDiv.offsetWidth;
                 canvas.height = mapDiv.offsetHeight;
-                drawOnCanvas();
             }
 
-            // Initial resize
             resizeCanvas();
-
-            // Handle window resize
             window.addEventListener('resize', resizeCanvas);
 
-            // Handle map movements to update overlay if needed
-            map.on('move', drawOnCanvas);
-            map.on('zoom', drawOnCanvas);
-
-            // Example drawing function
-            function drawOnCanvas() {
-                // Clear canvas
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                return
-
-                // Example: Draw a semi-transparent rectangle
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
-                ctx.fillRect(100, 100, 200, 150);
-
-                // Example: Draw a circle
-                ctx.beginPath();
-                ctx.arc(canvas.width / 2, canvas.height / 2, 50, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(0, 0, 255, 0.3)';
-                ctx.fill();
-
-                // Example: Draw text
-                ctx.fillStyle = 'white';
-                ctx.font = '16px Arial';
-                ctx.fillText('Canvas Overlay', canvas.width / 2 - 50, canvas.height / 2);
-
-                // Example: Draw lines
-                ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(canvas.width, canvas.height);
-                ctx.moveTo(canvas.width, 0);
-                ctx.lineTo(0, canvas.height);
-                ctx.stroke();
-
-                // You could also draw based on map coordinates
-                // Example: Draw at a specific geographic location
-                const coordinates = [116.3912757, 39.906217];
-                const pixelPosition = map.project(coordinates);
-
-                ctx.beginPath();
-                ctx.arc(pixelPosition.x, pixelPosition.y, 20, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
-                ctx.fill();
-
-                ctx.fillStyle = 'black';
-                ctx.font = '12px Arial';
-                ctx.fillText('Beijing', pixelPosition.x + 25, pixelPosition.y);
-            }
-
-            // If you want interactive canvas (remove pointer-events: none from CSS)
             canvas.addEventListener('click', (e) => {
                 const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-
-                console.log(`Canvas clicked at: ${x}, ${y}`);
-
-                // Convert to map coordinates
-                const lngLat = map.unproject([x, y]);
+                const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
                 console.log(`Map coordinates: ${lngLat.lng}, ${lngLat.lat}`);
-
-                // Draw something at click position
-                ctx.beginPath();
-                ctx.arc(x, y, 15, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 165, 0, 0.5)';
-                ctx.fill();
             });
         }
 
         /**
-         * 独立函数：从指定API获取传感器数据并绘制到指定canvas上
-         * @param {string} apiUrl - 传感器数据API地址
-         * @param {HTMLCanvasElement} canvas - 要绘制的canvas元素
-         * @param {Object} customStyles - 自定义样式（可选）
-         * @returns {Promise<Array>} 返回传感器数据数组
+         * 拉传感器数据并画到 canvas 上
          */
         async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
-            // 验证参数
             if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
                 throw new Error('有效的canvas元素是必需的');
             }
 
-            try {
-                // 1. 获取传感器数据
-                const response = await fetch(apiUrl);
-                if (!response.ok) {
-                    throw new Error(`HTTP错误: ${response.status}`);
-                }
-
-                const sensors = await response.json();
-
-                // 2. 获取canvas上下文
-                const ctx = canvas.getContext('2d');
-                if (!ctx) {
-                    throw new Error('无法获取canvas上下文');
-                }
-
-                // 3. 合并默认样式和自定义样式
-                const defaultStyles = {
-                    humidity: {
-                        color: 'rgba(65, 105, 225, 0.8)',
-                        radius: 8,
-                        borderColor: 'rgba(30, 144, 255, 1)',
-                        labelColor: 'black'
-                    },
-                    temp: {
-                        color: 'rgba(220, 20, 60, 0.8)',
-                        radius: 10,
-                        borderColor: 'rgba(255, 69, 0, 1)',
-                        labelColor: 'black'
-                    },
-                    default: {
-                        color: 'rgba(50, 205, 50, 0.8)',
-                        radius: 8,
-                        borderColor: 'rgba(34, 139, 34, 1)',
-                        labelColor: 'black'
-                    },
-                    fontSize: 12,
-                    fontFamily: 'Arial'
-                };
-
-                const styles = { ...defaultStyles, ...customStyles };
-
-                // 4. 清除canvas
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 5. 绘制每个传感器
-                sensors.forEach(sensor => {
-                    drawSingleSensor(ctx, canvas, sensor, styles);
-                });
-
-                // 6. 返回传感器数据供进一步使用
-                return sensors;
-
-            } catch (error) {
-                console.error('绘制传感器数据失败:', error);
-                throw error;
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
             }
+            const sensors = await response.json();
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('无法获取canvas上下文');
+
+            const defaultStyles = {
+                humidity: { color: 'rgba(65, 105, 225, 0.8)', radius: 8, borderColor: 'rgba(30, 144, 255, 1)', labelColor: 'black' },
+                temp: { color: 'rgba(220, 20, 60, 0.8)', radius: 10, borderColor: 'rgba(255, 69, 0, 1)', labelColor: 'black' },
+                default: { color: 'rgba(50, 205, 50, 0.8)', radius: 8, borderColor: 'rgba(34, 139, 34, 1)', labelColor: 'black' },
+                fontSize: 12,
+                fontFamily: 'Arial'
+            };
+            const styles = { ...defaultStyles, ...customStyles };
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            sensors.forEach(sensor => drawSingleSensor(ctx, canvas, sensor, styles));
+            return sensors;
         }
 
-        /**
-         * 绘制单个传感器
-         */
         function drawSingleSensor(ctx, canvas, sensor, styles) {
-            // 确定传感器类型
-            const sensorId = sensor.sensor_id.toLowerCase();
+            const sensorId = (sensor.sensor_id || '').toLowerCase();
             let type = 'default';
-
-            if (sensorId.includes('humidity')) {
-                type = 'humidity';
-            } else if (sensorId.includes('temp')) {
-                type = 'temp';
-            }
-
+            if (sensorId.includes('humidity')) type = 'humidity';
+            else if (sensorId.includes('temp')) type = 'temp';
             const style = styles[type] || styles.default;
 
-            // const lat1 = 30, lat2 = 33, lon1 = 110, lon2 = 121;
+            // 与 simulate.py 里的 BBOX 保持一致
             const lat1 = 30, lat2 = 31, lon1 = 110, lon2 = 111;
-            const lat = (1 - sensor.y_position) * (lat2 - lat1) + lat1,
-                lon = sensor.x_position * (lon2 - lon1) + lon1;
+            const lat = (1 - sensor.y_position) * (lat2 - lat1) + lat1;
+            const lon = sensor.x_position * (lon2 - lon1) + lon1;
 
             if (sensorId in mapMarkers) {
-                // The mapMarkers has sensorId
                 const { el } = mapMarkers[sensorId];
-                el.innerHTML = '<div>' + sensorId + '</div><div>' + sensor.value.toFixed(4) + '</div>';
+                const v = (typeof sensor.value === 'number') ? sensor.value.toFixed(4) : '—';
+                el.innerHTML = '<div>' + sensor.sensor_id + '</div><div>' + v + '</div>';
             } else {
-                // The mapMarkers does not have sensorId
                 const el = document.createElement('div');
-                el.innerHTML = sensorId
-                const marker = new mapboxgl.Marker({
-                    color: style.color,
-                    scale: 1.0        // scale the marker size
-                })
-                    .setLngLat([lon, lat])
-                    .addTo(map);
-
-                const tMarker = new mapboxgl.Marker({
-                    element: el, // 使用自定义HTML元素
-                    color: style.color,
-                    anchor: 'top', // 锚点位置
-                    scale: 1.0        // scale the marker size
-                })
-                    .setLngLat([lon, lat])
-                    .addTo(map);
-
-                mapMarkers[sensorId] = Object.assign({}, { marker, el, tMarker })
-            }
-
-            // // 转换坐标 (0-1 相对坐标 → 像素坐标)
-            // const x = sensor.x_position * canvas.width;
-            // const y = sensor.y_position * canvas.height;
-
-            // // 保存上下文状态
-            // ctx.save();
-
-            // // 绘制传感器点
-            // drawSensor(ctx, x, y, sensor, style, styles.fontSize, styles.fontFamily);
-
-            // // 恢复上下文状态
-            // ctx.restore();
-        }
-
-        /**
-         * 绘制单个传感器点的具体实现
-         */
-        function drawSensor(ctx, x, y, sensor, style, fontSize, fontFamily) {
-            // 绘制外圆边框
-            ctx.beginPath();
-            ctx.arc(x, y, style.radius + 2, 0, Math.PI * 2);
-            ctx.fillStyle = style.borderColor;
-            ctx.fill();
-
-            // 绘制内圆主体
-            ctx.beginPath();
-            ctx.arc(x, y, style.radius, 0, Math.PI * 2);
-            ctx.fillStyle = style.color;
-            ctx.fill();
-
-            // 绘制中心点
-            ctx.beginPath();
-            ctx.arc(x, y, style.radius / 3, 0, Math.PI * 2);
-            ctx.fillStyle = 'white';
-            ctx.fill();
-
-            // 绘制传感器ID
-            ctx.fillStyle = style.labelColor;
-            ctx.font = `bold ${fontSize}px ${fontFamily}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-
-            // 添加文字阴影
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetX = 1;
-            ctx.shadowOffsetY = 1;
-
-            ctx.fillText(sensor.sensor_id, x, y + style.radius + 8);
-
-            // 可选：绘制最后更新时间
-            if (sensor.last_updated) {
-                const timeText = new Date(sensor.last_updated).toLocaleTimeString();
-                ctx.font = `10px ${fontFamily}`;
-                ctx.fillText(timeText, x, y + style.radius + 25);
-            }
-
-            if (sensor.value) {
-                const value = sensor.value.toFixed(4);
-                ctx.font = `10px ${fontFamily}`;
-                ctx.fillText(value, x, y + style.radius + 40);
-
+                el.innerHTML = sensor.sensor_id;
+                const marker = new mapboxgl.Marker({ color: style.color, scale: 1.0 })
+                    .setLngLat([lon, lat]).addTo(map);
+                const tMarker = new mapboxgl.Marker({ element: el, color: style.color, anchor: 'top', scale: 1.0 })
+                    .setLngLat([lon, lat]).addTo(map);
+                mapMarkers[sensorId] = Object.assign({}, { marker, el, tMarker });
             }
         }
 
-        // 使用示例：
-        // 在你的setupCanvasOverlay函数中：
         function setupCanvasOverlay1() {
-            // ... 现有的canvas创建代码 ...
-
             const canvas = document.getElementById('overlayCanvas');
 
-            // 初始绘制
-            drawSensorsOnCanvas(
-                'latest_sensor_data',
-                canvas
-            ).then(sensors => {
-                console.log(`绘制了 ${sensors.length} 个传感器`);
-            });
+            drawSensorsOnCanvas('/latest_sensor_data', canvas)
+                .then(sensors => console.log(`绘制了 ${sensors.length} 个传感器`))
+                .catch(e => console.warn('传感器绘制失败', e));
 
-            // 定时更新
             setInterval(() => {
-                drawSensorsOnCanvas(
-                    'latest_sensor_data',
-                    canvas
-                ).then(sensors => {
-                    // console.log(`更新了 ${sensors.length} 个传感器`);
-                });
-            }, 5000); // 每5秒更新一次
+                drawSensorsOnCanvas('/latest_sensor_data', canvas)
+                    .catch(() => { });
+            }, 5000);
         }
     </script>
 </body>

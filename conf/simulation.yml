@@ -1,2 +1,6 @@
 hysplit:
-  weatherData: "E:/WeatherData/"
+  # HYSPLIT 用的 gdas1 气象数据目录。
+  # 当前机器上实际在 D:/WeatherData（原先写的 E: 已经不存在了）。
+  # python/hysplit/simulate.py 里的 resolve_met_file() 还会按
+  # D:/WeatherData、E:/WeatherData 兜底找，改这里只是让首选路径正确。
+  weatherData: "D:/WeatherData/"
