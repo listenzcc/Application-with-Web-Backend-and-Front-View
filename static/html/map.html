@@ -263,6 +263,9 @@
             lvlInit: false,
             pointsCache: new Map(),   // 帧号 -> 该帧散点
             gridCache: new Map(),     // 帧号 -> 该帧规则网格
+            gridGeom: null,           // 会话级固定网格几何（全部帧共用）
+            plumeSmall: null,         // gw x gh 的小画布，逐像素上色
+            plumeCanvas: null,        // 放大后的烟羽画布，mapbox canvas 源引用它
         };
 
         function setStatus(status, note) {
@@ -373,7 +376,7 @@
             }, 700);
         }
 
-        /** 换帧的统一入口：先确保 table.json 到位，再画热力图与等值线。 */
+        /** 换帧的统一入口：先确保 table.json 到位，再画烟羽与等值线。 */
         async function renderFrame() {
             try {
                 await loadTable();
@@ -381,6 +384,7 @@
                 console.warn('读取 table.json 失败', e);
                 return;
             }
+            ensureGridGeom();
             drawFrame();
             drawContours();
         }
@@ -515,7 +519,73 @@
             return points;
         }
 
-        /** 把当前帧的热力图画到地图上 */
+        // ------------------------------------------------------------------
+        // 浓度烟羽（插值渲染）
+        //
+        // 以前用 circle 圆点 + heatmap 密度图凑合，一格一格像马赛克。
+        // 现在把浓度场当成「场」来画：con2asc 的点本来就落在 0.05° 原生
+        // 网格上，先还原成整场模拟共用的规则网格（contour.js），逐格上
+        // viridis 色 + 按浓度算透明度，再交给 mapbox 的 canvas 源，
+        // WebGL 双线性插值自动把格子磨成连续的烟羽。
+        // 等值线用的也是同一份网格，所以线和色块严格对得上。
+        // ------------------------------------------------------------------
+
+        const PLUME_SCALE = 8;      // 小网格放大倍数，浏览器双线性插值把它磨平
+        const PLUME_OPACITY = 0.9;  // 烟羽整体不透明度上限
+        // 与图例一致的 viridis 五段色带（drawFrame 旧圆点层用的同一套色标）
+        const VIRIDIS = [
+            [0x44, 0x01, 0x54], [0x41, 0x44, 0x87], [0x2A, 0x78, 0x8E],
+            [0x22, 0xA8, 0x84], [0xFD, 0xE7, 0x25],
+        ];
+
+        function viridis(t) {
+            const x = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
+            const i = Math.min(VIRIDIS.length - 2, Math.floor(x));
+            const f = x - i;
+            const a = VIRIDIS[i], b = VIRIDIS[i + 1];
+            return [a[0] + (b[0] - a[0]) * f,
+                    a[1] + (b[1] - a[1]) * f,
+                    a[2] + (b[2] - a[2]) * f];
+        }
+
+        /**
+         * 会话级固定网格：把全部帧的经纬度并起来，外圈照旧补 pad。
+         * 每帧范围都在变的话烟羽图会一帧一跳，必须整场一张网。
+         */
+        function ensureGridGeom() {
+            if (state.gridGeom || !state.table || !state.table.LON) return;
+
+            const seenLon = new Set();
+            const seenLat = new Set();
+            const lons = [];
+            const lats = [];
+            for (const i in state.table.LON) {
+                const lon = Number(state.table.LON[i]);
+                const lat = Number(state.table.LAT[i]);
+                if (!seenLon.has(lon)) { seenLon.add(lon); lons.push(lon); }
+                if (!seenLat.has(lat)) { seenLat.add(lat); lats.push(lat); }
+            }
+            if (!lons.length) return;
+            lons.sort((a, b) => a - b);
+            lats.sort((a, b) => a - b);
+
+            const dlon = Contour.gridStep(lons, GRID_FALLBACK_STEP);
+            const dlat = Contour.gridStep(lats, GRID_FALLBACK_STEP);
+            const i0 = Math.round(lons[0] / dlon) - GRID_PAD;
+            const i1 = Math.round(lons[lons.length - 1] / dlon) + GRID_PAD;
+            const j0 = Math.round(lats[0] / dlat) - GRID_PAD;
+            const j1 = Math.round(lats[lats.length - 1] / dlat) + GRID_PAD;
+
+            state.gridGeom = {
+                dlon, dlat, i0, j0,
+                gw: Math.max(2, i1 - i0 + 1),
+                gh: Math.max(2, j1 - j0 + 1),
+                lon0: i0 * dlon,
+                lat0: j0 * dlat,
+            };
+        }
+
+        /** 把当前帧的烟羽画到地图上 */
         function drawFrame() {
             const frame = state.frames[state.index];
             if (!frame) return;
@@ -523,74 +593,92 @@
             const points = framePoints(frame);
             if (!points.length) return;
 
-            const features = points.map(p =>
-                turf.point([p.lon, p.lat], { value: p.value }));
-            const featureCollection = turf.featureCollection(features);
+            const grid = frameGrid(frame, points);
+            drawPlume(grid);
+        }
 
-            // mapbox 的 interpolate 要求断点严格递增。
-            // 全帧同值（vmax == vmin）时必须兜一个区间出来，否则会报错。
+        function ensurePlumeCanvases() {
+            if (state.plumeSmall) return;
+            const g = state.gridGeom;
+            state.plumeSmall = document.createElement('canvas');
+            state.plumeSmall.width = g.gw;
+            state.plumeSmall.height = g.gh;
+            state.plumeCanvas = document.createElement('canvas');
+            state.plumeCanvas.width = g.gw * PLUME_SCALE;
+            state.plumeCanvas.height = g.gh * PLUME_SCALE;
+            // mapbox 的 canvas 源要求画布在 DOM 里。挪出屏幕藏起来，
+            // 不能 display:none（那样画布内容读不到）
+            state.plumeCanvas.style.cssText =
+                'position:fixed;left:-10000px;top:0;width:1px;height:1px;';
+            document.body.appendChild(state.plumeCanvas);
+        }
+
+        function ensurePlumeLayer() {
+            if (map.getSource('plume-src')) return;
+            const g = state.gridGeom;
+            // 图片边缘外扩半格，格子中心才落在正确的经纬度上
+            const west = g.lon0 - g.dlon / 2;
+            const east = g.lon0 + (g.gw - 1) * g.dlon + g.dlon / 2;
+            const south = g.lat0 - g.dlat / 2;
+            const north = g.lat0 + (g.gh - 1) * g.dlat + g.dlat / 2;
+            map.addSource('plume-src', {
+                type: 'canvas',
+                canvas: state.plumeCanvas,
+                coordinates: [[west, north], [east, north], [east, south], [west, south]],
+                animate: true,
+            });
+            map.addLayer({
+                id: 'plume-layer',
+                type: 'raster',
+                source: 'plume-src',
+                paint: {
+                    'raster-opacity': PLUME_OPACITY,
+                    'raster-resampling': 'linear',
+                },
+            });
+        }
+
+        function drawPlume(grid) {
+            ensurePlumeCanvases();
+            ensurePlumeLayer();
+
+            const g = state.gridGeom;
+            const sctx = state.plumeSmall.getContext('2d');
+            const img = sctx.createImageData(g.gw, g.gh);
+
+            // 颜色按整场量程映射，帧与帧之间色标一致，跟图例、阈值对得上
             let vmin = Number(state.vMin);
             let vmax = Number(state.vMax);
             if (!isFinite(vmin)) vmin = 0;
             if (!isFinite(vmax) || vmax <= vmin) vmax = vmin + 1;
             const span = vmax - vmin;
 
-            // 源和图层已经建好就只换数据，拖动滑块才不会闪
-            if (map.getSource('heatmap-points')) {
-                map.getSource('heatmap-points').setData(featureCollection);
-                return;
+            // 透明度按本帧自身的 lo~hi 归一：补边区（< lo）为 0，
+            // 烟羽边缘自然羽化，核心最实
+            const vr = Math.max(grid.hi - grid.lo, 1e-3);
+
+            for (let j = 0; j < g.gh; j++) {
+                for (let i = 0; i < g.gw; i++) {
+                    const v = grid.values[j * g.gw + i];
+                    const u = (v - grid.lo) / vr;
+                    const a = Math.pow(Math.min(1, Math.max(0, u)), 0.6);
+                    const c = viridis((v - vmin) / span);
+                    // values 行 0 在南边，canvas 行 0 在北边，要翻
+                    const px = ((g.gh - 1 - j) * g.gw + i) * 4;
+                    img.data[px] = Math.round(c[0]);
+                    img.data[px + 1] = Math.round(c[1]);
+                    img.data[px + 2] = Math.round(c[2]);
+                    img.data[px + 3] = Math.round(a * 255);
+                }
             }
+            sctx.putImageData(img, 0, 0);
 
-            map.addSource('heatmap-points', { type: 'geojson', data: featureCollection });
-
-            map.addLayer({
-                id: 'heatmap-layer',
-                type: 'circle',
-                source: 'heatmap-points',
-                paint: {
-                    'circle-radius': [
-                        'interpolate', ['linear'], ['get', 'value'],
-                        vmin, 5,
-                        vmax, 30
-                    ],
-                    'circle-color': [
-                        'interpolate', ['linear'], ['get', 'value'],
-                        vmin, '#440154',
-                        vmin + span * 0.25, '#414487',
-                        vmin + span * 0.5, '#2A788E',
-                        vmin + span * 0.75, '#22A884',
-                        vmax, '#FDE725'
-                    ],
-                    'circle-blur': 0.7,
-                    'circle-opacity': 0.5,
-                    'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 0, 0, 9, 1],
-                    'circle-stroke-color': 'rgba(255,255,255,0.0)'
-                }
-            });
-
-            map.addLayer({
-                id: 'heatmap-layer-1',
-                type: 'heatmap',
-                source: 'heatmap-points',
-                paint: {
-                    'heatmap-color': [
-                        'interpolate', ['linear'], ['heatmap-density'],
-                        0, 'rgba(68, 1, 84, 0)',
-                        0.1, 'rgba(68, 1, 84, 50)',
-                        0.2, '#440154',
-                        0.4, '#414487',
-                        0.6, '#2A788E',
-                        0.8, '#22A884',
-                        1, '#FDE725'
-                    ],
-                    'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 9, 3],
-                    'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 2, 9, 20],
-                    'heatmap-opacity': 0.7
-                }
-            });
-
-            // 等值线要盖在热力图上面，热力图层是刚加的，把它压回去
-            raiseContourLayers();
+            const ctx = state.plumeCanvas.getContext('2d');
+            ctx.clearRect(0, 0, state.plumeCanvas.width, state.plumeCanvas.height);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(state.plumeSmall, 0, 0,
+                state.plumeCanvas.width, state.plumeCanvas.height);
         }
 
         // ------------------------------------------------------------------
@@ -634,8 +722,11 @@
             if (cached) return cached;
             // 网格反推、平滑、外圈补 padding 这些纯计算都放在 contour.js 里，
             // 跟 FDS 房间页共用一份实现。
+            // 网格几何用会话级固定的（ensureGridGeom），烟羽图和等值线
+            // 才能落在同一张网上。
             // smooth=2：散点直接等值线会出现一堆孤立碎块，平滑两遍才连得成片。
             const grid = Contour.gridFromPoints(points, {
+                grid: state.gridGeom,
                 pad: GRID_PAD,
                 step: GRID_FALLBACK_STEP,
                 smooth: 2,
@@ -689,7 +780,7 @@
             }
         }
 
-        /** 把等值线图层抬到热力图上面，顺序是填充在下、描边在上。 */
+        /** 把等值线图层抬到烟羽上面，顺序是填充在下、描边在上。 */
         function raiseContourLayers() {
             CONTOUR_LAYERS.forEach((def) => {
                 if (map.getLayer(def.id)) map.moveLayer(def.id);

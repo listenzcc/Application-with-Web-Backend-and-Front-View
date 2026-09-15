@@ -248,6 +248,82 @@
     }
 
     /**
+     * 补内部空洞。
+     *
+     * 散点网格里没有观测的格子先铺了低于 lo 的基数，在烟羽栅格图上
+     * 就是一堆透明破洞，等值线也会绕着洞走出一圈锯齿。这里从网格边界
+     * 泛洪，把「走不到的未观测格子」（内部洞）按邻域均值逐层填上；
+     * 外圈补边区一个格子都不动——等值线收口靠它保证在 pad 层内
+     * 掉到 lo 以下，动了就会顶边裁断。
+     *
+     * 就地修改 values，返回补掉的格子数。
+     */
+    function fillHoles(values, mask, gw, gh) {
+        const n = gw * gh;
+
+        // 从边界泛洪标记外区（能走到的未观测格子）
+        const outsideRegion = new Uint8Array(n);
+        const stack = [];
+        for (let i = 0; i < gw; i++) stack.push(i, (gh - 1) * gw + i);
+        for (let j = 0; j < gh; j++) stack.push(j * gw, j * gw + gw - 1);
+        while (stack.length) {
+            const idx = stack.pop();
+            if (outsideRegion[idx] || mask[idx]) continue;
+            outsideRegion[idx] = 1;
+            const i = idx % gw;
+            if (i > 0) stack.push(idx - 1);
+            if (i < gw - 1) stack.push(idx + 1);
+            if (idx >= gw) stack.push(idx - gw);
+            if (idx < n - gw) stack.push(idx + gw);
+        }
+
+        const known = new Uint8Array(mask);   // 有值的格子
+        let nHoles = 0;
+        for (let k = 0; k < n; k++) {
+            if (!known[k] && !outsideRegion[k]) nHoles++;
+        }
+        if (!nHoles) return 0;
+
+        // 逐层填：每层取「已填邻居」的均值，填完往外扩一层
+        let frontier = [];
+        for (let k = 0; k < n; k++) {
+            if (known[k] || outsideRegion[k]) continue;
+            const i = k % gw;
+            if ((i > 0 && known[k - 1]) || (i < gw - 1 && known[k + 1]) ||
+                (k >= gw && known[k - gw]) || (k < n - gw && known[k + gw])) {
+                frontier.push(k);
+            }
+        }
+        while (frontier.length) {
+            const updates = [];
+            for (const idx of frontier) {
+                const i = idx % gw;
+                let sum = 0;
+                let cnt = 0;
+                if (i > 0 && known[idx - 1]) { sum += values[idx - 1]; cnt++; }
+                if (i < gw - 1 && known[idx + 1]) { sum += values[idx + 1]; cnt++; }
+                if (idx >= gw && known[idx - gw]) { sum += values[idx - gw]; cnt++; }
+                if (idx < n - gw && known[idx + gw]) { sum += values[idx + gw]; cnt++; }
+                if (cnt) updates.push([idx, sum / cnt]);
+            }
+            for (const [idx, v] of updates) {
+                values[idx] = v;
+                known[idx] = 1;
+            }
+            frontier = [];
+            for (const [idx] of updates) {
+                const i = idx % gw;
+                const nb = [i > 0 ? idx - 1 : -1, i < gw - 1 ? idx + 1 : -1,
+                            idx >= gw ? idx - gw : -1, idx < n - gw ? idx + gw : -1];
+                for (const m of nb) {
+                    if (m >= 0 && !known[m] && !outsideRegion[m]) frontier.push(m);
+                }
+            }
+        }
+        return nHoles;
+    }
+
+    /**
      * 散点 -> 规则网格。
      *
      * 用在 HYSPLIT 那边：con2asc 输出的浓度点本来就落在等间距的经纬度格上，
@@ -261,6 +337,8 @@
      * opts:   pad     往外补几格
      *         step    推不出网格间距时的默认步长
      *         smooth  平滑几遍（0 = 不平滑）
+     *         grid    可选，外部给定的网格几何 {dlon,dlat,i0,j0,gw,gh}，
+     *                 给了就不再从散点反推范围（跨帧固定网格时用）
      *
      * 返回 {values, mask, gw, gh, dlon, dlat, lon0, lat0, lo, hi}，
      * values 按行优先存，格子 (i, j) 的经纬度是
@@ -272,27 +350,41 @@
         const fallbackStep = opts.step > 0 ? opts.step : 0.05;
         const smooth = Math.max(0, (opts.smooth || 0) | 0);
 
-        const lons = [];
-        const lats = [];
-        const seenLon = new Set();
-        const seenLat = new Set();
-        for (const p of points) {
-            if (!seenLon.has(p.lon)) { seenLon.add(p.lon); lons.push(p.lon); }
-            if (!seenLat.has(p.lat)) { seenLat.add(p.lat); lats.push(p.lat); }
+        let dlon, dlat, i0, j0, gw, gh;
+
+        if (opts.grid) {
+            // 外部给定网格几何（跨帧固定的会话网格）。烟羽栅格图要求
+            // 整场模拟共用一个网格，否则每帧范围都在变，图会跳。
+            const g = opts.grid;
+            dlon = g.dlon;
+            dlat = g.dlat;
+            i0 = g.i0;
+            j0 = g.j0;
+            gw = g.gw;
+            gh = g.gh;
+        } else {
+            const lons = [];
+            const lats = [];
+            const seenLon = new Set();
+            const seenLat = new Set();
+            for (const p of points) {
+                if (!seenLon.has(p.lon)) { seenLon.add(p.lon); lons.push(p.lon); }
+                if (!seenLat.has(p.lat)) { seenLat.add(p.lat); lats.push(p.lat); }
+            }
+            lons.sort((a, b) => a - b);
+            lats.sort((a, b) => a - b);
+
+            dlon = gridStep(lons, fallbackStep);
+            dlat = gridStep(lats, fallbackStep);
+
+            i0 = Math.round(lons[0] / dlon) - pad;
+            const i1 = Math.round(lons[lons.length - 1] / dlon) + pad;
+            j0 = Math.round(lats[0] / dlat) - pad;
+            const j1 = Math.round(lats[lats.length - 1] / dlat) + pad;
+
+            gw = Math.max(2, i1 - i0 + 1);
+            gh = Math.max(2, j1 - j0 + 1);
         }
-        lons.sort((a, b) => a - b);
-        lats.sort((a, b) => a - b);
-
-        const dlon = gridStep(lons, fallbackStep);
-        const dlat = gridStep(lats, fallbackStep);
-
-        const i0 = Math.round(lons[0] / dlon) - pad;
-        const i1 = Math.round(lons[lons.length - 1] / dlon) + pad;
-        const j0 = Math.round(lats[0] / dlat) - pad;
-        const j1 = Math.round(lats[lats.length - 1] / dlat) + pad;
-
-        const gw = Math.max(2, i1 - i0 + 1);
-        const gh = Math.max(2, j1 - j0 + 1);
 
         let lo = Infinity;
         let hi = -Infinity;
@@ -315,6 +407,9 @@
         }
 
         if (smooth > 0) values = blurMasked(values, gw, gh, mask, smooth);
+
+        // 内部洞用邻域均值补上，烟羽图不再有透明破洞，等值线也不绕洞锯齿
+        fillHoles(values, mask, gw, gh);
 
         // 从数据区一层层往外渗，每层低一个 step，最多渗 pad + 10 层。
         //
@@ -357,6 +452,7 @@
         smoothRing: smoothRing,
         extent: gridExtent,
         blurMasked: blurMasked,
+        fillHoles: fillHoles,
         gridFromPoints: gridFromPoints,
         gridStep: gridStep,
     };
