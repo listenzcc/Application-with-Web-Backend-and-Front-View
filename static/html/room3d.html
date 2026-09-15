@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>FDS 三维模拟</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, "Microsoft YaHei", Arial, sans-serif;
+            background: #eef2f6;
+        }
+
+        #view {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 800px;
+            height: 800px;
+            z-index: 10;
+        }
+
+        #view canvas {
+            display: block;
+        }
+
+        #hud {
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            z-index: 500;
+            background: rgba(255, 255, 255, .93);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #222;
+        }
+
+        #statusLine {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+
+        #hudRow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        #frameRange {
+            flex: 1 1 200px;
+            min-width: 140px;
+        }
+
+        #frameLabel {
+            font-variant-numeric: tabular-nums;
+            min-width: 150px;
+            display: inline-block;
+        }
+
+        #runningSpan {
+            color: #8d6e00;
+        }
+
+        .btn {
+            border: 1px solid #bbb;
+            background: #fafafa;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn:hover {
+            background: #f0f0f0;
+        }
+
+        .btn:disabled {
+            opacity: .5;
+            cursor: default;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: #eee;
+            color: #333;
+        }
+
+        .tag.success {
+            background: #e6f4ea;
+            color: #1b5e20;
+        }
+
+        .tag.failed {
+            background: #fdecea;
+            color: #b71c1c;
+        }
+
+        .tag.pending {
+            background: #fff8e1;
+            color: #8d6e00;
+        }
+
+        #legendLine {
+            margin-top: 6px;
+            color: #555;
+        }
+
+        #hudRow2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e0e0e0;
+            color: #333;
+        }
+
+        #hudRow2 input.num {
+            width: 92px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            padding: 1px 4px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #hudRow2 input[type=range] {
+            width: 90px;
+        }
+
+        #contourNote {
+            color: #666;
+        }
+
+        .swatch {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            vertical-align: -1px;
+            margin-right: 3px;
+            margin-left: 8px;
+        }
+
+        #templateBox {
+            display: none;
+            max-height: 220px;
+            overflow: auto;
+            margin-top: 6px;
+            background: #1e1e1e;
+            color: #d8d8d8;
+            border-radius: 4px;
+            padding: 6px;
+            white-space: pre;
+            font-family: Consolas, monospace;
+            font-size: 11px;
+        }
+
+        #hintBox {
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            z-index: 500;
+            background: rgba(255, 255, 255, .8);
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            padding: 5px 8px;
+            font-size: 11px;
+            color: #555;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="view"></div>
+
+    <div id="hintBox">
+        左键拖动旋转 · 滚轮缩放 · 右键拖动平移<br>
+        体云由 PL3D 体数据三线性插值渲染
+    </div>
+
+    <div id="hud">
+        <div id="statusLine">
+            <span id="sessionTag" class="tag">会话</span>
+            <span id="statusTag" class="tag">—</span>
+            <span id="frameLabel">— / —</span>
+            <span id="runningSpan"></span>
+        </div>
+        <div id="hudRow">
+            <button id="playBtn" class="btn" title="播放 / 暂停" disabled>▶ 播放</button>
+            <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
+            <button id="templateBtn" class="btn" title="查看本次实际使用的输入卡">查看 CONTROL</button>
+        </div>
+        <div id="hudRow2">
+            <label class="chk"><input id="dangerChk" type="checkbox" checked> 危险区着色</label>
+            <span class="swatch" style="background:#f08c00"></span>
+            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+            <span class="swatch" style="background:#c1121f"></span>
+            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <span id="contourNote">—</span>
+        </div>
+        <div id="hudRow2">
+            <label>云浓度 <input id="opacityInput" type="range" min="0.1" max="3" step="0.05" value="1"></label>
+            <label>采样步长 <input id="stepInput" type="range" min="0.5" max="2" step="0.1" value="1"></label>
+            <label class="chk"><input id="obstChk" type="checkbox" checked> 障碍物</label>
+            <label class="chk"><input id="devcChk" type="checkbox" checked> 检测点</label>
+            <label class="chk"><input id="boxChk" type="checkbox" checked> 计算域边框</label>
+            <label class="chk"><input id="darkChk" type="checkbox"> 深色背景</label>
+        </div>
+        <div id="legendLine">
+            浓度
+            <span class="swatch" style="background:#FDE725"></span>高
+            <span class="swatch" style="background:#22A884"></span>
+            <span class="swatch" style="background:#440154"></span>低
+            <span id="scaleText"></span>
+        </div>
+        <pre id="templateBox"></pre>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/static/src/three/three.module.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from '/static/src/three/OrbitControls.js';
+
+        const sessionStr = "{{session}}";
+        const resultApiUrl = `/get_fds3d_simulation_result/${encodeURIComponent(sessionStr)}`;
+        const frameApiUrl = (frame) => `/get_fds3d_simulation_frame?session=${encodeURIComponent(sessionStr)}&frame=${encodeURIComponent(frame)}`;
+        const templateApiUrl = `/get_fds3d_simulation_template?session=${encodeURIComponent(sessionStr)}`;
+
+        const $ = (id) => document.getElementById(id);
+
+        const LIGHT_BG = 0xeef2f6;
+        const DARK_BG = 0x0b0f14;
+
+        // 与二维页面共用的色标（viridis 五段）与危险区配色
+        const VIRIDIS = [
+            [0x44, 0x01, 0x54], [0x41, 0x44, 0x87], [0x2A, 0x78, 0x8E],
+            [0x22, 0xA8, 0x84], [0xFD, 0xE7, 0x25],
+        ];
+
+        const state = {
+            frames: [],
+            index: 0,
+            playing: false,
+            timer: null,
+            status: 'missing',
+            vMin: 0,
+            vMax: 1,
+            grid: null,          // [nx, ny, nz]
+            xb: null,            // [x0,x1,y0,y1,z0,z1]
+            lvl1: null,
+            lvl2: null,
+            lvlInit: false,
+            cache: new Map(),    // 帧号 -> Uint8Array
+            texture: null,
+            bytes: null,
+            mesh: null,
+            uniforms: null,
+            baseStep: 0.1,       // 最小网格边长，采样步长的基准
+            current: -1,
+        };
+
+        // ------------------------------------------------------------------
+        // 场景
+        // ------------------------------------------------------------------
+        const container = $('view');
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setClearColor(LIGHT_BG, 1);
+        container.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        // FDS 的 z 轴朝上，让相机也跟着用 z-up
+        const camera = new THREE.PerspectiveCamera(
+            45, container.clientWidth / container.clientHeight, 0.005, 5000);
+        camera.up.set(0, 0, 1);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+
+        const helpers = new THREE.Group();
+        scene.add(helpers);
+
+        // 辅助元素按类分组，显隐开关直接切组，别去猜 geometry 类型
+        const gridGroup = new THREE.Group();
+        const obstGroup = new THREE.Group();
+        const devcGroup = new THREE.Group();
+        helpers.add(gridGroup, obstGroup, devcGroup);
+
+        const boxGroup = new THREE.Group();
+        scene.add(boxGroup);
+
+        function onResize() {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            renderer.setSize(w, h);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        }
+        window.addEventListener('resize', onResize);
+
+        // ------------------------------------------------------------------
+        // 体渲染着色器
+        // ------------------------------------------------------------------
+        const vertexShader = /* glsl */`
+            uniform vec3 uBoxSize;
+            out vec3 vPos;          // 盒子局部坐标，0 ~ size
+
+            void main() {
+                vPos = position + uBoxSize * 0.5;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        const fragmentShader = /* glsl */`
+            precision highp float;
+            precision highp sampler3D;
+
+            in vec3 vPos;
+            out vec4 outColor;
+
+            uniform sampler3D uVolume;
+            uniform vec3 uBoxSize;
+            uniform vec3 uCameraPos;   // 相机在盒子局部坐标（0 ~ size）里的位置
+            uniform float uGlobalMin;
+            uniform float uGlobalMax;
+            uniform float uFrameMin;
+            uniform float uFrameMax;
+            uniform float uLvl1;
+            uniform float uLvl2;
+            uniform float uUseDanger;
+            uniform float uOpacity;
+            uniform float uStep;
+            uniform float uJitter;
+
+            vec3 viridis(float t) {
+                t = clamp(t, 0.0, 1.0) * 4.0;
+                vec3 c0 = vec3(0.267, 0.005, 0.329);
+                vec3 c1 = vec3(0.255, 0.267, 0.529);
+                vec3 c2 = vec3(0.165, 0.471, 0.557);
+                vec3 c3 = vec3(0.133, 0.659, 0.518);
+                vec3 c4 = vec3(0.992, 0.906, 0.145);
+                if (t < 1.0) return mix(c0, c1, t);
+                if (t < 2.0) return mix(c1, c2, t - 1.0);
+                if (t < 3.0) return mix(c2, c3, t - 2.0);
+                return mix(c3, c4, t - 3.0);
+            }
+
+            // 光线与 [0, uBoxSize] 盒子的交点参数
+            vec2 hitBox(vec3 ro, vec3 rd) {
+                vec3 invD = 1.0 / rd;
+                vec3 t0 = (vec3(0.0) - ro) * invD;
+                vec3 t1 = (uBoxSize - ro) * invD;
+                vec3 tmin = min(t0, t1);
+                vec3 tmax = max(t0, t1);
+                return vec2(max(max(tmin.x, tmin.y), tmin.z),
+                            min(min(tmax.x, tmax.y), tmax.z));
+            }
+
+            void main() {
+                vec3 ro = uCameraPos;
+                vec3 rd = normalize(vPos - ro);
+                vec2 t = hitBox(ro, rd);
+                float tNear = max(t.x, 0.0);
+                float tFar = t.y;
+                if (tFar <= tNear) discard;
+
+                float step = uStep;
+                int steps = int(min(4096.0, (tFar - tNear) / step));
+                float start = tNear + step * uJitter;
+
+                vec4 acc = vec4(0.0);
+                for (int i = 0; i < 4096; i++) {
+                    if (i >= steps) break;
+                    vec3 p = ro + rd * (start + float(i) * step);
+                    float g = texture(uVolume, p / uBoxSize).r;   // 全局归一化 0~1
+                    if (g > 0.0015) {
+                        float val = mix(uGlobalMin, uGlobalMax, g);
+                        float u = clamp((val - uFrameMin) /
+                                        max(uFrameMax - uFrameMin, 1e-12), 0.0, 1.0);
+                        // 体积分数的动态范围全压在泄漏点附近，低次幂才能把
+                        // 烟羽主体提亮；高次幂只剩核心一点，整朵云看不见
+                        float a = pow(u, 0.4) * uOpacity * 0.12;
+                        vec3 col = viridis(g);
+                        if (uUseDanger > 0.5) {
+                            if (val >= uLvl2) {
+                                col = mix(col, vec3(0.757, 0.071, 0.122), 0.8);
+                                a = max(a, 0.10);
+                            } else if (val >= uLvl1) {
+                                col = mix(col, vec3(0.941, 0.549, 0.0), 0.65);
+                                a = max(a, 0.055);
+                            }
+                        }
+                        acc.rgb += (1.0 - acc.a) * a * col;
+                        acc.a += (1.0 - acc.a) * a;
+                        if (acc.a > 0.985) break;
+                    }
+                }
+
+                if (acc.a <= 0.002) discard;
+                // 标准 alpha 混合要非预乘颜色
+                outColor = vec4(acc.rgb / max(acc.a, 1e-4), acc.a);
+            }
+        `;
+
+        function makeVolumeMaterial() {
+            return new THREE.ShaderMaterial({
+                glslVersion: THREE.GLSL3,
+                vertexShader,
+                fragmentShader,
+                transparent: true,
+                depthWrite: false,
+                side: THREE.BackSide,
+                uniforms: {
+                    uVolume: { value: null },
+                    uBoxSize: { value: new THREE.Vector3(1, 1, 1) },
+                    uCameraPos: { value: new THREE.Vector3() },
+                    uGlobalMin: { value: 0 },
+                    uGlobalMax: { value: 1 },
+                    uFrameMin: { value: 0 },
+                    uFrameMax: { value: 1 },
+                    uLvl1: { value: 1e9 },
+                    uLvl2: { value: 1e9 },
+                    uUseDanger: { value: 1 },
+                    uOpacity: { value: 1 },
+                    uStep: { value: 0.1 },
+                    uJitter: { value: 0 },
+                },
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // 场景搭建（拿到 xb / ijk 之后才能建）
+        // ------------------------------------------------------------------
+        function buildScene() {
+            const [x0, x1, y0, y1, z0, z1] = state.xb;
+            const [nx, ny, nz] = state.grid;
+            const sx = x1 - x0, sy = y1 - y0, sz = z1 - z0;
+            const center = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2,
+                                             (z0 + z1) / 2);
+
+            const geometry = new THREE.BoxGeometry(sx, sy, sz);
+            const material = makeVolumeMaterial();
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(center);
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            state.mesh = mesh;
+            state.uniforms = material.uniforms;
+
+            // 体数据纹理：uint8 单通道，线性过滤（三线性插值）
+            const tex = new THREE.Data3DTexture(
+                new Uint8Array(nx * ny * nz), nx, ny, nz);
+            tex.format = THREE.RedFormat;
+            tex.type = THREE.UnsignedByteType;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.wrapS = THREE.ClampToEdgeWrapping;
+            tex.wrapT = THREE.ClampToEdgeWrapping;
+            tex.wrapR = THREE.ClampToEdgeWrapping;
+            tex.unpackAlignment = 1;
+            tex.needsUpdate = true;
+            state.texture = tex;
+            material.uniforms.uVolume.value = tex;
+
+            // 采样步长取最小网格边长，物理空间等距
+            const cell = Math.min(sx / (nx - 1), sy / (ny - 1), sz / (nz - 1));
+            state.baseStep = cell;
+            material.uniforms.uStep.value = cell;
+            material.uniforms.uBoxSize.value.set(sx, sy, sz);
+
+            // 计算域边框
+            const edges = new THREE.LineSegments(
+                new THREE.EdgesGeometry(new THREE.BoxGeometry(sx, sy, sz)),
+                new THREE.LineBasicMaterial({ color: 0x37474f }));
+            edges.position.copy(center);
+            boxGroup.add(edges);
+
+            // 地面网格：GridHelper 默认躺在 y-up 的 XZ 平面里，
+            // 我们是 z-up，转 90° 才是真正的地板
+            const grid = new THREE.GridHelper(Math.max(sx, sy), 10, 0xb0bec5, 0xcfd8dc);
+            grid.rotation.x = Math.PI / 2;
+            grid.position.set(center.x, center.y, z0);
+            gridGroup.add(grid);
+
+            // 相机初始位置：斜上方看向域中心
+            const dist = Math.max(sx, sy, sz) * 2.0;
+            camera.position.set(center.x + dist * 0.9,
+                                center.y - dist * 0.9,
+                                center.z + dist * 0.65);
+            controls.target.copy(center);
+            controls.update();
+        }
+
+        function drawObstacles(env) {
+            const obst = (env && env.obst) || [];
+            obst.forEach((o) => {
+                const [a, b, c, d, e, f] = o.xb;
+                const geo = new THREE.BoxGeometry(b - a, d - c, f - e);
+                const mat = new THREE.MeshStandardMaterial({
+                    color: 0x9aa7b1, transparent: true, opacity: 0.55,
+                    roughness: 0.9, metalness: 0.0,
+                });
+                const m = new THREE.Mesh(geo, mat);
+                m.position.set((a + b) / 2, (c + d) / 2, (e + f) / 2);
+                obstGroup.add(m);
+                const wire = new THREE.LineSegments(
+                    new THREE.EdgesGeometry(geo),
+                    new THREE.LineBasicMaterial({ color: 0x546e7a }));
+                wire.position.copy(m.position);
+                obstGroup.add(wire);
+            });
+        }
+
+        function drawDevices(env, sensors) {
+            const [x0, x1, y0, y1, z0, z1] = state.xb;
+            const r = Math.max((x1 - x0), (y1 - y0)) * 0.012;
+            const dot = (x, y, z, color) => {
+                const m = new THREE.Mesh(
+                    new THREE.SphereGeometry(r, 16, 12),
+                    new THREE.MeshBasicMaterial({ color }));
+                m.position.set(x, y, Math.min(Math.max(z, z0), z1));
+                devcGroup.add(m);
+            };
+            ((env && env.devices) || []).forEach((d) => {
+                if (!d.xyz) return;
+                dot(d.xyz[0], d.xyz[1], d.xyz[2], 0x1565c0);
+            });
+            (sensors || []).forEach((s) => {
+                const x = x0 + (s.x_position || 0) * (x1 - x0);
+                const y = y0 + (s.y_position || 0) * (y1 - y0);
+                dot(x, y, (z0 + z1) / 2, 0xd85a30);
+            });
+        }
+
+        function clearGroup(group) {
+            while (group.children.length) {
+                const c = group.children.pop();
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) c.material.dispose();
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // 数据
+        // ------------------------------------------------------------------
+        function setStatus(status, note) {
+            state.status = status;
+            const mapping = { success: '完成', failed: '失败', pending: '计算中', missing: '无数据' };
+            const tag = $('statusTag');
+            tag.textContent = mapping[status] || status;
+            tag.className = 'tag ' + (status === 'pending' ? 'pending' : status);
+            tag.title = note || '';
+            $('sessionTag').textContent = sessionStr === '???' ? '未选择会话' : sessionStr;
+        }
+
+        function fmtNum(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '—';
+            if (n === 0) return '0';
+            if (Math.abs(n) < 1e-3 || Math.abs(n) >= 1e5) return n.toExponential(2);
+            return String(Number(n.toPrecision(3)));
+        }
+
+        function setFrameLabel() {
+            const n = state.frames.length;
+            if (!n) { $('frameLabel').textContent = '— / —'; return; }
+            const f = state.frames[state.index];
+            const t = (f.time === null || f.time === undefined) ? '—' : `${f.time}s`;
+            $('frameLabel').textContent = `t = ${t}   (${state.index + 1}/${n})`;
+        }
+
+        async function refresh() {
+            let resp;
+            try {
+                const r = await fetch(resultApiUrl);
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                resp = await r.json();
+            } catch (e) {
+                setStatus('failed', String(e));
+                return;
+            }
+
+            setStatus(resp.status, resp.note);
+            state.vMin = (resp.v_min === null || resp.v_min === undefined) ? 0 : Number(resp.v_min);
+            state.vMax = (resp.v_max === null || resp.v_max === undefined) ? 1 : Number(resp.v_max);
+            $('scaleText').textContent =
+                `　量程 ${fmtNum(state.vMin)} ~ ${fmtNum(state.vMax)}（${resp.quantity || '体积分数'}，mol/mol）`;
+            initLevels(resp);
+
+            if (resp.status === 'pending') {
+                $('runningSpan').textContent = resp.exists ? '模拟正在计算，请稍候…' : '尚未开始';
+                setTimeout(refresh, 2000);
+                return;
+            }
+            $('runningSpan').textContent = resp.note ? resp.note : '';
+            if (resp.status !== 'success') return;
+
+            const vol = resp.volume || {};
+            state.grid = vol.ijk || null;
+            state.xb = vol.xb || (resp.config || {}).xb || null;
+            if (!state.grid || !state.xb) return;
+
+            const frames = resp.frames || [];
+            state.frames = frames;
+            const range = $('frameRange');
+            range.min = 0;
+            range.max = Math.max(0, frames.length - 1);
+            range.disabled = frames.length < 1;
+            $('playBtn').disabled = frames.length < 2;
+            setFrameLabel();
+
+            if (!state.mesh) {
+                buildScene();
+                drawObstacles(resp.environment);
+                drawDevices(resp.environment, resp.sensors);
+                applyToggles();
+                await showFrame(0);
+            } else {
+                await showFrame(state.index);
+            }
+        }
+
+        async function frameBytes(frame) {
+            const cached = state.cache.get(frame.index);
+            if (cached) return cached;
+            const r = await fetch(frameApiUrl(frame.file));
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const buf = await r.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            state.cache.set(frame.index, bytes);
+            return bytes;
+        }
+
+        async function showFrame(index) {
+            const frame = state.frames[index];
+            if (!frame || !state.texture) return;
+            let bytes;
+            try {
+                bytes = await frameBytes(frame);
+            } catch (e) {
+                console.warn('读取体数据失败', e);
+                return;
+            }
+            const expected = state.grid[0] * state.grid[1] * state.grid[2];
+            if (bytes.length !== expected) {
+                console.warn(`体数据长度 ${bytes.length} 与网格 ${expected} 不符`);
+            }
+            state.texture.image.data.set(bytes);
+            state.texture.needsUpdate = true;
+            state.current = index;
+            state.bytes = bytes;
+
+            const u = state.uniforms;
+            u.uGlobalMin.value = state.vMin;
+            u.uGlobalMax.value = state.vMax;
+            u.uFrameMin.value = (frame.v_min === null || frame.v_min === undefined)
+                ? state.vMin : Number(frame.v_min);
+            u.uFrameMax.value = (frame.v_max === null || frame.v_max === undefined)
+                ? state.vMax : Number(frame.v_max);
+
+            updateDangerNote();
+            setFrameLabel();
+        }
+
+        function updateDangerNote() {
+            const el = $('contourNote');
+            if (!state.bytes) { el.textContent = '—'; return; }
+            const showDanger = $('dangerChk').checked;
+            if (!showDanger) { el.textContent = '（危险区着色已关闭）'; return; }
+
+            const span = Math.max(state.vMax - state.vMin, 1e-12);
+            const l1 = Number(state.lvl1);
+            const l2 = Number(state.lvl2);
+            let n1 = 0;
+            let n2 = 0;
+            const bytes = state.bytes;
+            const stride = Math.max(1, Math.floor(bytes.length / 400000));
+            let total = 0;
+            for (let i = 0; i < bytes.length; i += stride) {
+                const v = state.vMin + (bytes[i] / 255) * span;
+                if (v >= l1) n1++;
+                if (v >= l2) n2++;
+                total++;
+            }
+            const p1 = total ? (n1 / total * 100).toFixed(2) : '0';
+            const p2 = total ? (n2 / total * 100).toFixed(2) : '0';
+            el.textContent =
+                `致伤 ≥ ${fmtNum(l1)} 占 ${p1}% 体素　|　致死 ≥ ${fmtNum(l2)} 占 ${p2}% 体素`;
+        }
+
+        function initLevels(res) {
+            if (state.lvlInit) return;
+            const cfg = (res && res.config) || {};
+            const lo = state.vMin;
+            const hi = state.vMax;
+            const span = Math.max(hi - lo, 1e-12);
+            const pick = (v, fallback) => {
+                // 没存过阈值时是 null，Number(null) 是 0，得先挡掉，
+                // 不然阈值会被初始化成 0，整片数据都成了危险区
+                if (v === null || v === undefined || v === '') return fallback;
+                const n = Number(v);
+                return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
+            };
+            state.lvl1 = pick(cfg.lvl1, Number((lo + span * 0.35).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.60).toPrecision(4)));
+            $('lvl1Input').value = state.lvl1;
+            $('lvl2Input').value = state.lvl2;
+
+            const step = (span / 100).toPrecision(2);
+            $('lvl1Input').step = step;
+            $('lvl2Input').step = step;
+            state.lvlInit = true;
+        }
+
+        function onLevelInput() {
+            state.lvl1 = Number($('lvl1Input').value);
+            state.lvl2 = Number($('lvl2Input').value);
+            state.lvlInit = true;
+            applyDanger();
+            updateDangerNote();
+        }
+
+        function applyDanger() {
+            const u = state.uniforms;
+            if (!u) return;
+            const on = $('dangerChk').checked;
+            u.uUseDanger.value = on ? 1 : 0;
+            u.uLvl1.value = isFinite(Number(state.lvl1)) ? Number(state.lvl1) : 1e9;
+            u.uLvl2.value = isFinite(Number(state.lvl2)) ? Number(state.lvl2) : 1e9;
+        }
+
+        function applyToggles() {
+            boxGroup.visible = $('boxChk').checked;
+            gridGroup.visible = $('boxChk').checked;
+            obstGroup.visible = $('obstChk').checked;
+            devcGroup.visible = $('devcChk').checked;
+
+            const dark = $('darkChk').checked;
+            renderer.setClearColor(dark ? DARK_BG : LIGHT_BG, 1);
+
+            if (state.uniforms) {
+                state.uniforms.uOpacity.value = Number($('opacityInput').value);
+                // 以最小网格边长做基准，滑块只调相对倍数
+                state.uniforms.uStep.value =
+                    state.baseStep * Number($('stepInput').value);
+            }
+            applyDanger();
+        }
+
+        // ------------------------------------------------------------------
+        // 播放控制
+        // ------------------------------------------------------------------
+        function onFrameInput() {
+            state.index = parseInt($('frameRange').value, 10) || 0;
+            setFrameLabel();
+            showFrame(state.index);
+        }
+
+        function togglePlay() {
+            if (state.playing) {
+                state.playing = false;
+                clearInterval(state.timer);
+                $('playBtn').textContent = '▶ 播放';
+                return;
+            }
+            if (state.frames.length < 2) return;
+            state.playing = true;
+            $('playBtn').textContent = '❚❚ 暂停';
+            state.timer = setInterval(() => {
+                state.index = (state.index + 1) % state.frames.length;
+                $('frameRange').value = state.index;
+                showFrame(state.index);
+            }, 700);
+        }
+
+        // ------------------------------------------------------------------
+        // 交互绑定
+        // ------------------------------------------------------------------
+        $('frameRange').addEventListener('input', onFrameInput);
+        $('playBtn').addEventListener('click', togglePlay);
+        $('lvl1Input').addEventListener('input', onLevelInput);
+        $('lvl2Input').addEventListener('input', onLevelInput);
+        $('dangerChk').addEventListener('change', () => {
+            applyDanger();
+            updateDangerNote();
+        });
+        $('opacityInput').addEventListener('input', applyToggles);
+        $('stepInput').addEventListener('input', applyToggles);
+        $('boxChk').addEventListener('change', applyToggles);
+        $('obstChk').addEventListener('change', applyToggles);
+        $('devcChk').addEventListener('change', applyToggles);
+        $('darkChk').addEventListener('change', applyToggles);
+
+        $('templateBtn').addEventListener('click', async () => {
+            const box = $('templateBox');
+            if (box.style.display === 'block') { box.style.display = 'none'; return; }
+            try {
+                const r = await fetch(templateApiUrl);
+                box.textContent = r.ok ? await r.text() : '（没有读到输入卡）';
+            } catch (e) {
+                box.textContent = String(e);
+            }
+            box.style.display = 'block';
+        });
+
+        // ------------------------------------------------------------------
+        // 渲染循环
+        // ------------------------------------------------------------------
+        const camLocal = new THREE.Vector3();
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (state.mesh && state.uniforms) {
+                // 相机位置换算到盒子局部坐标（0 ~ size），供光线求交用
+                camLocal.copy(camera.position);
+                state.mesh.worldToLocal(camLocal);
+                camLocal.addScaledVector(state.uniforms.uBoxSize.value, 0.5);
+                state.uniforms.uCameraPos.value.copy(camLocal);
+                // 抖动采样起点，破掉等距采样带来的条纹
+                state.uniforms.uJitter.value = Math.random();
+            }
+            renderer.render(scene, camera);
+        }
+
+        refresh();
+        animate();
+    </script>
+</body>
+
+</html>

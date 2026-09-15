@@ -94,6 +94,8 @@ def create_header():
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('扩散仿真(CFD模型)', '/simulationFDS',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
+                    ui.link('扩散仿真(CFD三维模型)', '/simulationFDS3D',
+                            ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('仿真案例', '/caseBrowser',
                             ).classes('text-gray-700 hover:text-blue-600 no-underline font-medium')
                     ui.link('气体管理', '/gasExplorer',

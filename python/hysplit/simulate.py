@@ -76,7 +76,7 @@ COPIED_TEMPLATES = ('SETUP.CFG', 'ASCDATA.CFG')
 
 #: 气象数据目录候选。conf/simulation.yml 里配的那个优先，
 #: 取不到或里面没有需要的文件时按这个列表兜底找。
-MET_DIR_CANDIDATES = ('D:/WeatherData', 'E:/WeatherData')
+MET_DIR_CANDIDATES = ('C:/WeatherData', 'D:/WeatherData', 'E:/WeatherData')
 
 #: 计算域（经纬度框）。HYSPLIT 的释放点都落在这个框里。
 DEFAULT_BBOX = {'lat1': 30.0, 'lat2': 31.0, 'lon1': 110.0, 'lon2': 111.0}
@@ -362,7 +362,7 @@ def _run_hysplit_job(sensors: list, config: dict, session: str):
     def finish(status: str, note: str):
         elapsed = time.time() - started
         tail = f'finished at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, ' \
-               f'total {elapsed:.1f}s'
+            f'total {elapsed:.1f}s'
         text = f'{note}\n{tail}\n' if note else f'{tail}\n'
         (dst / status).write_text(text, encoding='utf-8')
         log(f'[{status}] {text.strip()}')
@@ -512,7 +512,8 @@ def build_environment(dst: Path, config: dict, sensors: list) -> dict:
     year = int(config.get('year') or 0)
     month = int(config.get('month') or 0)
     day = int(config.get('day') or 0)
-    met_name = met_file_name(year, month, day) if year and month and day else ''
+    met_name = met_file_name(
+        year, month, day) if year and month and day else ''
     met_dir, _ = resolve_met_file(year, month, day) if met_name else (None, '')
 
     release_points = []

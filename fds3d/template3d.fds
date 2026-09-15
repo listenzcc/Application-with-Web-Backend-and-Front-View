@@ -1,0 +1,55 @@
+; FDS 三维（体数据）输入文件，由 fds3d/template3d.fds 渲染生成
+; 会话      : {{SESSION}}
+; 生成时间  : {{GENERATED_AT}}
+;
+; 模板里的占位符（渲染时替换），注意：占位符只能出现在 namelist 里，
+; 写在注释里会被替换成真正的 namelist 而造成重复定义。
+;   CHID TITLE T_END DT_DEVC DT_SLCF DT_BNDF DT_PL3D DT_RESTART SPEC_ID
+;   MESH SPEC DEVC SURF OBST VENT SLCF
+;
+; 与二维模板的差别只在 &DUMP：DT_PL3D 用「体数据输出间隔」，
+; 一次模拟落多帧体数据（<CHID>_*_*.q），供前端做三维动画。
+; PLOT3D_QUANTITY 的第五项是体积分数，PLOT3D_SPEC_ID 要跟着给到第五项。
+
+&HEAD CHID='{{CHID}}', TITLE='{{TITLE}}'/
+&TIME T_END={{T_END}}/
+&DUMP RENDER_FILE='{{CHID}}.ge1', DT_BNDF={{DT_BNDF}}, DT_DEVC={{DT_DEVC}}, DT_PL3D={{DT_PL3D}}, DT_RESTART={{DT_RESTART}}, DT_SLCF={{DT_SLCF}}, WRITE_XYZ=.TRUE., PLOT3D_QUANTITY='MASS FRACTION',,,,'VOLUME FRACTION', PLOT3D_SPEC_ID='{{SPEC_ID}}',,,,'{{SPEC_ID}}'/
+
+{{MESH}}
+
+&SPEC ID='{{SPEC_ID}}'/
+{{SPEC}}
+
+{{DEVC}}
+
+&MATL ID='STEEL',
+      SPECIFIC_HEAT=0.45,
+      CONDUCTIVITY=50.0,
+      DENSITY=7850.0/
+&MATL ID='CONCRETE',
+      SPECIFIC_HEAT=0.88,
+      CONDUCTIVITY=1.5,
+      DENSITY=2400.0/
+
+&SURF ID='CONVERTER_SURF',
+      MATL_ID(1,1)='STEEL',
+      MATL_MASS_FRACTION(1,1)=1.0,
+      THICKNESS(1)=0.1/
+&SURF ID='Supply',
+      RGB=26,204,26,
+      VEL=-1.0/
+&SURF ID='WALL_SURF',
+      COLOR='GRAY',
+      MATL_ID(1,1)='CONCRETE',
+      MATL_MASS_FRACTION(1,1)=1.0,
+      THICKNESS(1)=0.1/
+
+{{SURF}}
+
+{{OBST}}
+
+{{VENT}}
+
+{{SLCF}}
+
+&TAIL /

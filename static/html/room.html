@@ -604,6 +604,8 @@
             const [vlo, vhi] = contourValueRange();
             const span = (vhi - vlo) || 1;
             const pick = (v, fallback) => {
+                // 没存过阈值时是 null，Number(null) 是 0，得先挡掉
+                if (v === null || v === undefined || v === '') return fallback;
                 const n = Number(v);
                 return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
             };
