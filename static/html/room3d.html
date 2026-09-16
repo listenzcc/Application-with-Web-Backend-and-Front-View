@@ -303,7 +303,7 @@
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        controls.dampingFactor = 0.08;
+        controls.dampingFactor = 0.12;
 
         const helpers = new THREE.Group();
         scene.add(helpers);
@@ -358,7 +358,6 @@
             uniform float uUseDanger;
             uniform float uOpacity;
             uniform float uStep;
-            uniform float uJitter;
 
             vec3 viridis(float t) {
                 t = clamp(t, 0.0, 1.0) * 4.0;
@@ -384,6 +383,17 @@
                             min(min(tmax.x, tmax.y), tmax.z));
             }
 
+            // 屏幕空间确定性抖动：同一个像素每帧拿到同一个偏移量。
+            // 之前是逐帧取随机数去抖采样起点，本意是打散等距采样的条纹，
+            // 但相位每帧都变，密区的累积不透明度就跟着逐帧抖，静态视角也
+            // 在闪（步长越大越明显）。改成按像素固定的低差异偏移后，条纹
+            // 照样被拆成高频噪点，而静态视角每帧结果完全一致。
+            float hash12(vec2 p) {
+                vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return fract((p3.x + p3.y) * p3.z);
+            }
+
             void main() {
                 vec3 ro = uCameraPos;
                 vec3 rd = normalize(vPos - ro);
@@ -394,7 +404,7 @@
 
                 float step = uStep;
                 int steps = int(min(4096.0, (tFar - tNear) / step));
-                float start = tNear + step * uJitter;
+                float start = tNear + step * hash12(gl_FragCoord.xy);
 
                 vec4 acc = vec4(0.0);
                 for (int i = 0; i < 4096; i++) {
@@ -451,7 +461,6 @@
                     uUseDanger: { value: 1 },
                     uOpacity: { value: 1 },
                     uStep: { value: 0.1 },
-                    uJitter: { value: 0 },
                 },
             });
         }
@@ -835,9 +844,52 @@
         // 渲染循环
         // ------------------------------------------------------------------
         const camLocal = new THREE.Vector3();
+        const prevCamPos = new THREE.Vector3();
+        const prevCamQuat = new THREE.Quaternion();
+        let camFrozen = false;   // 相机已停稳，本帧不再推进
+        let interacting = false; // 指针按着 / 触摸中，中途不要冻
+
+        /** 单帧相机位移折算成屏幕像素，用来判断"是不是已经看不见在动了"。 */
+        function cameraMotionPixels() {
+            const h = renderer.domElement.clientHeight || 1;
+            const pxPerRad = h / (2 * Math.tan((camera.fov * Math.PI / 180) / 2));
+            const dist = camera.position.distanceTo(controls.target) || 1;
+            return (camera.position.distanceTo(prevCamPos) / dist +
+                    camera.quaternion.angleTo(prevCamQuat)) * pxPerRad;
+        }
+
+        /**
+         * 相机就地停死。
+         * 阻尼是让相机以越来越小的步长无限逼近目标，松手后画面会长时间
+         * 缓慢滑动（尾段速度小但位移还在，看起来就是发飘、一直在闪）。
+         * 这里临时关掉阻尼跑一帧，把残余量一次性放完，之后就不再推进相机。
+         */
+        function freezeCamera() {
+            controls.enableDamping = false;
+            controls.update();
+            controls.enableDamping = true;
+            camFrozen = true;
+        }
+
+        renderer.domElement.addEventListener('pointerdown', () => {
+            interacting = true;
+            camFrozen = false;
+        });
+        window.addEventListener('pointerup', () => { interacting = false; });
+        window.addEventListener('pointercancel', () => { interacting = false; });
+        // 滚轮缩放没有 pointerdown，靠 controls 自己的 start 事件解冻
+        controls.addEventListener('start', () => { camFrozen = false; });
+
         function animate() {
             requestAnimationFrame(animate);
-            controls.update();
+
+            if (!camFrozen) {
+                controls.update();
+                // 单帧位移不到 1/50 像素就没必要再动
+                if (!interacting && cameraMotionPixels() < 0.02) freezeCamera();
+                prevCamPos.copy(camera.position);
+                prevCamQuat.copy(camera.quaternion);
+            }
 
             if (state.mesh && state.uniforms) {
                 // 相机位置换算到盒子局部坐标（0 ~ size），供光线求交用
@@ -845,8 +897,6 @@
                 state.mesh.worldToLocal(camLocal);
                 camLocal.addScaledVector(state.uniforms.uBoxSize.value, 0.5);
                 state.uniforms.uCameraPos.value.copy(camLocal);
-                // 抖动采样起点，破掉等距采样带来的条纹
-                state.uniforms.uJitter.value = Math.random();
             }
             renderer.render(scene, camera);
         }
