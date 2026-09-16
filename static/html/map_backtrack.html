@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>HYSPLIT 模拟</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+
+    <link href="/static/src/mapbox-gl.css" rel="stylesheet">
+    <script src="/static/src/mapbox-gl.js"></script>
+    <script src="/static/secret/config.js"></script>
+    <script src="/static/src/turf.min.js"></script>
+    <script src="/static/src/contour.js"></script>
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: system-ui, "Microsoft YaHei", Arial, sans-serif;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 800px;
+            height: 800px;
+            z-index: 10;
+        }
+
+        .click-through {
+            pointer-events: none;
+        }
+
+        #hud {
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            z-index: 500;
+            background: rgba(255, 255, 255, .92);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #222;
+        }
+
+        #statusLine {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+
+        #hudRow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        #frameRange {
+            flex: 1 1 220px;
+            min-width: 140px;
+        }
+
+        #frameLabel {
+            font-variant-numeric: tabular-nums;
+            min-width: 120px;
+            display: inline-block;
+        }
+
+        #runningSpan {
+            color: #8d6e00;
+        }
+
+        .btn {
+            border: 1px solid #bbb;
+            background: #fafafa;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn:hover {
+            background: #f0f0f0;
+        }
+
+        .btn:disabled {
+            opacity: .5;
+            cursor: default;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: #eee;
+            color: #333;
+        }
+
+        .tag.success {
+            background: #e6f4ea;
+            color: #1b5e20;
+        }
+
+        .tag.failed {
+            background: #fdecea;
+            color: #b71c1c;
+        }
+
+        .tag.pending {
+            background: #fff8e1;
+            color: #8d6e00;
+        }
+
+        #legendLine {
+            margin-top: 6px;
+            color: #555;
+        }
+
+        #hudRow2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e0e0e0;
+            color: #333;
+        }
+
+        #hudRow2 input.num {
+            width: 92px;
+            border: 1px solid #bbb;
+            border-radius: 4px;
+            padding: 1px 4px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #contourNote {
+            color: #666;
+        }
+
+        .swatch {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            vertical-align: -1px;
+            margin-right: 3px;
+            margin-left: 8px;
+        }
+
+        #progressBox {
+            display: none;
+            max-height: 110px;
+            overflow: auto;
+            border-top: 1px dashed #ddd;
+            margin-top: 6px;
+            padding-top: 4px;
+            color: #666;
+        }
+
+        #progressBox ol {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        #templateBox {
+            display: none;
+            max-height: 220px;
+            overflow: auto;
+            margin-top: 6px;
+            background: #1e1e1e;
+            color: #d8d8d8;
+            border-radius: 4px;
+            padding: 6px;
+            white-space: pre;
+            font-family: Consolas, monospace;
+            font-size: 11px;
+        }
+    </style>
+</head>
+
+<body>
+    <div>
+        <div id="map"></div>
+        <div id="overlap" class="click-through" style="z-index:100; position: fixed"></div>
+        <div id="simulation" class="click-through" style="z-index:200; position: fixed"></div>
+    </div>
+
+    <div id="hud">
+        <div id="statusLine">
+            <span id="sessionTag" class="tag">会话</span>
+            <span id="statusTag" class="tag">—</span>
+            <span id="frameLabel">— / —</span>
+            <span id="runningSpan"></span>
+        </div>
+        <div id="hudRow">
+            <button id="playBtn" class="btn" title="播放 / 暂停" disabled>▶ 播放</button>
+            <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
+            <button id="templateBtn" class="btn" title="查看本次实际使用的 CONTROL">查看 CONTROL</button>
+        </div>
+        <div id="hudRow2">
+            <label class="chk"><input id="contourChk" type="checkbox" checked> 危险区等值线</label>
+            <span class="swatch" style="background:#f08c00"></span>
+            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+            <span class="swatch" style="background:#c1121f"></span>
+            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <span id="contourNote">—</span>
+        </div>
+        <div id="legendLine">
+            浓度
+            <span class="swatch" style="background:#FDE725"></span>高
+            <span class="swatch" style="background:#22A884"></span>
+            <span class="swatch" style="background:#440154"></span>低
+            <span id="scaleText"></span>
+        </div>
+        <div id="progressBox">
+            <ol id="progressList"></ol>
+        </div>
+        <pre id="templateBox"></pre>
+    </div>
+
+    <script>
+        console.log('Turf version:', turf, turf.version);
+    </script>
+
+    <script>
+        const sessionStr = "{{session}}";
+        const resultApiUrl = `/get_hysplit_backward_simulation_result/${encodeURIComponent(sessionStr)}`;
+        const frameApiUrl = (frame) => `/get_hysplit_backward_simulation_frame?session=${encodeURIComponent(sessionStr)}&frame=${encodeURIComponent(frame)}`;
+        const tableApiUrl = `/get_hysplit_backward_simulation_table_json?session=${encodeURIComponent(sessionStr)}`;
+        const templateApiUrl = `/get_hysplit_backward_simulation_template?session=${encodeURIComponent(sessionStr)}`;
+
+        const $ = (id) => document.getElementById(id);
+
+        // 时间轴 / 状态。frames.json 是唯一数据源，不再去点 .png 文件
+        const state = {
+            frames: [],
+            index: 0,
+            playing: false,
+            timer: null,
+            status: 'pending',
+            mapReady: false,
+            table: null,       // table.json 缓存，拖动滑块时不再重复请求
+            vMin: 0,
+            vMax: 5,
+            releaseDrawn: false,
+            // 危险区阈值：与色标同单位（log10 相对值），改完立刻重画等值线
+            showContour: true,
+            lvl1: null,
+            lvl2: null,
+            lvlInit: false,
+            pointsCache: new Map(),   // 帧号 -> 该帧散点
+            gridCache: new Map(),     // 帧号 -> 该帧规则网格
+            gridGeom: null,           // 会话级固定网格几何（全部帧共用）
+            plumeSmall: null,         // gw x gh 的小画布，逐像素上色
+            plumeCanvas: null,        // 放大后的烟羽画布，mapbox canvas 源引用它
+        };
+
+        function setStatus(status, note) {
+            state.status = status;
+            const mapping = { success: '完成', failed: '失败', pending: '计算中', missing: '无数据' };
+            const tag = $('statusTag');
+            tag.textContent = mapping[status] || status;
+            tag.className = 'tag ' + (status === 'pending' ? 'pending' : status);
+            tag.title = note || '';
+            $('sessionTag').textContent = sessionStr === '???' ? '未选择会话' : sessionStr;
+        }
+
+        function setFrameLabel() {
+            const n = state.frames.length;
+            if (!n) {
+                $('frameLabel').textContent = '— / —';
+                return;
+            }
+            const f = state.frames[state.index];
+            $('frameLabel').textContent = `${f.label || f.file}   (${state.index + 1}/${n})`;
+        }
+
+        /**
+         * 拉一次结果接口，更新状态与时间轴。
+         * 还在算就继续轮询，算完就解锁滑块。
+         */
+        async function refresh() {
+            let resp;
+            try {
+                const r = await fetch(resultApiUrl);
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                resp = await r.json();
+            } catch (e) {
+                setStatus('failed', String(e));
+                return;
+            }
+
+            setStatus(resp.status, resp.note);
+            state.vMin = (resp.v_min === null || resp.v_min === undefined) ? 0 : resp.v_min;
+            state.vMax = (resp.v_max === null || resp.v_max === undefined) ? 5 : resp.v_max;
+
+            // 选中一场结果先把它的值范围摆出来，用户才知道该把阈值定在哪
+            $('scaleText').textContent =
+                `　量程 ${fmtNum(state.vMin)} ~ ${fmtNum(state.vMax)}（log10 相对值）`;
+            initLevels(resp);
+
+            if (resp.status === 'pending') {
+                $('runningSpan').textContent = resp.exists ? '模拟正在计算，请稍候…' : '尚未开始';
+                $('progressBox').style.display = 'block';
+                const ol = $('progressList');
+                ol.innerHTML = '';
+                (resp.files || []).forEach(f => {
+                    const li = document.createElement('li');
+                    li.textContent = f;
+                    ol.appendChild(li);
+                });
+                setTimeout(refresh, 1500);
+                return;
+            }
+
+            $('runningSpan').textContent = '';
+            $('progressBox').style.display = 'none';
+
+            const frames = resp.frames || [];
+            if (frames.length !== state.frames.length ||
+                (frames.length && state.frames.length && frames[0].file !== state.frames[0].file)) {
+                state.frames = frames;
+                state.pointsCache.clear();
+                state.gridCache.clear();
+                const range = $('frameRange');
+                range.min = 0;
+                range.max = Math.max(0, frames.length - 1);
+                range.value = 0;
+                state.index = 0;
+            }
+
+            const has = frames.length > 0;
+            $('frameRange').disabled = !has;
+            $('playBtn').disabled = !has;
+            setFrameLabel();
+
+            drawEnvMarkers(resp.environment);
+            if (has && state.mapReady) renderFrame();
+        }
+
+        /** 帧列表 / 滑块拖动 */
+        function onFrameInput() {
+            state.index = parseInt($('frameRange').value, 10) || 0;
+            setFrameLabel();
+            renderFrame();
+        }
+
+        function togglePlay() {
+            if (state.playing) {
+                state.playing = false;
+                clearInterval(state.timer);
+                $('playBtn').textContent = '▶ 播放';
+                return;
+            }
+            if (state.frames.length < 2) return;
+            state.playing = true;
+            $('playBtn').textContent = '❚❚ 暂停';
+            state.timer = setInterval(() => {
+                state.index = (state.index + 1) % state.frames.length;
+                $('frameRange').value = state.index;
+                setFrameLabel();
+                renderFrame();
+            }, 700);
+        }
+
+        /** 换帧的统一入口：先确保 table.json 到位，再画烟羽与等值线。 */
+        async function renderFrame() {
+            try {
+                await loadTable();
+            } catch (e) {
+                console.warn('读取 table.json 失败', e);
+                return;
+            }
+            ensureGridGeom();
+            drawFrame();
+            drawContours();
+        }
+
+        /** 在图上标出释放点（来自 environment.release_points） */
+        function drawEnvMarkers(env) {
+            if (!env || !env.release_points || state.releaseDrawn) return;
+            env.release_points.forEach(p => {
+                const el = document.createElement('div');
+                el.style.cssText = 'width:10px;height:10px;border-radius:50%;' +
+                    'background:#D85A30;border:2px solid #fff;box-shadow:0 0 3px #0006;';
+                el.title = `${p.sensor_id || 'release'}  ${p.mass}`;
+                new mapboxgl.Marker({ element: el })
+                    .setLngLat([p.lon, p.lat])
+                    .addTo(map);
+            });
+            state.releaseDrawn = true;
+        }
+    </script>
+
+    <script>
+        mapboxgl.accessToken = MAPBOX_CONFIG.accessToken;
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: MAPBOX_CONFIG.styleId,
+            projection: 'globe',
+            zoom: "{{zoom}}",
+            center: ["{{lon}}", "{{lat}}"]
+        });
+
+        const mapMarkers = {};
+
+        map.addControl(new mapboxgl.NavigationControl());
+
+        map.on('style.load', () => {
+            map.setFog({});
+        });
+
+        map.on('load', () => {
+            setupCanvasOverlay();
+            setupCanvasOverlay1();
+            setupSimulationOverlay();
+            state.mapReady = true;
+
+            $('frameRange').addEventListener('input', onFrameInput);
+            $('playBtn').addEventListener('click', togglePlay);
+
+            // 阈值改一下立刻重画等值线，不碰后台模拟结果
+            const onLevelInput = () => {
+                state.lvl1 = Number($('lvl1Input').value);
+                state.lvl2 = Number($('lvl2Input').value);
+                state.lvlInit = true;
+                drawContours();
+            };
+            $('lvl1Input').addEventListener('input', onLevelInput);
+            $('lvl2Input').addEventListener('input', onLevelInput);
+            $('contourChk').addEventListener('change', (e) => {
+                state.showContour = e.target.checked;
+                drawContours();
+            });
+
+            $('templateBtn').addEventListener('click', async () => {
+                const box = $('templateBox');
+                if (box.style.display === 'block') {
+                    box.style.display = 'none';
+                    return;
+                }
+                try {
+                    const r = await fetch(templateApiUrl);
+                    box.textContent = r.ok ? await r.text() : '（没有读到 CONTROL）';
+                } catch (e) {
+                    box.textContent = String(e);
+                }
+                box.style.display = 'block';
+            });
+
+            refresh();
+        });
+
+        /**
+         * 模拟浓度叠加层。帧数据来自 frames.json，
+         * 拖动滑块直接换帧，不需要再去列目录点 png。
+         */
+        function setupSimulationOverlay() {
+            const simulationDiv = document.getElementById('simulation');
+            simulationDiv.innerHTML = '';
+            const mapDiv = document.getElementById('map');
+
+            const canvas = document.createElement('canvas');
+            canvas.id = 'simulationCanvas';
+            simulationDiv.appendChild(canvas);
+            const ctx = canvas.getContext('2d');
+
+            function resizeCanvas() {
+                canvas.width = mapDiv.offsetWidth;
+                canvas.height = mapDiv.offsetHeight;
+            }
+
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+        }
+
+        async function loadTable() {
+            if (state.table) return state.table;
+            const r = await fetch(tableApiUrl);
+            state.table = await r.json();
+            return state.table;
+        }
+
+        /**
+         * 从 table.json 里挑出某一帧的散点。
+         *
+         * table.json 是 pandas 的 to_json 默认输出：列优先，每列是一个
+         * 以行号为键的对象，不是数组。所以只能用 for...in，不能靠
+         * resp.LON.length 去数长度。
+         */
+        function framePoints(frame) {
+            const table = state.table;
+            if (!frame || !table || !table.LON) return [];
+
+            const cached = state.pointsCache.get(frame.index);
+            if (cached) return cached;
+
+            const day = Number(frame.day);
+            const hr = Number(frame.hour);
+            const points = [];
+            for (const i in table.LON) {
+                if (Number(table.DAY[i]) !== day || Number(table.HR[i]) !== hr) continue;
+                points.push({ lon: table.LON[i], lat: table.LAT[i], value: table.m[i] });
+            }
+            state.pointsCache.set(frame.index, points);
+            return points;
+        }
+
+        // ------------------------------------------------------------------
+        // 浓度烟羽（插值渲染）
+        //
+        // 以前用 circle 圆点 + heatmap 密度图凑合，一格一格像马赛克。
+        // 现在把浓度场当成「场」来画：con2asc 的点本来就落在 0.05° 原生
+        // 网格上，先还原成整场模拟共用的规则网格（contour.js），逐格上
+        // viridis 色 + 按浓度算透明度，再交给 mapbox 的 canvas 源，
+        // WebGL 双线性插值自动把格子磨成连续的烟羽。
+        // 等值线用的也是同一份网格，所以线和色块严格对得上。
+        // ------------------------------------------------------------------
+
+        const PLUME_SCALE = 8;      // 小网格放大倍数，浏览器双线性插值把它磨平
+        const PLUME_OPACITY = 0.9;  // 烟羽整体不透明度上限
+        // 与图例一致的 viridis 五段色带（drawFrame 旧圆点层用的同一套色标）
+        const VIRIDIS = [
+            [0x44, 0x01, 0x54], [0x41, 0x44, 0x87], [0x2A, 0x78, 0x8E],
+            [0x22, 0xA8, 0x84], [0xFD, 0xE7, 0x25],
+        ];
+
+        function viridis(t) {
+            const x = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
+            const i = Math.min(VIRIDIS.length - 2, Math.floor(x));
+            const f = x - i;
+            const a = VIRIDIS[i], b = VIRIDIS[i + 1];
+            return [a[0] + (b[0] - a[0]) * f,
+                    a[1] + (b[1] - a[1]) * f,
+                    a[2] + (b[2] - a[2]) * f];
+        }
+
+        /**
+         * 会话级固定网格：把全部帧的经纬度并起来，外圈照旧补 pad。
+         * 每帧范围都在变的话烟羽图会一帧一跳，必须整场一张网。
+         */
+        function ensureGridGeom() {
+            if (state.gridGeom || !state.table || !state.table.LON) return;
+
+            const seenLon = new Set();
+            const seenLat = new Set();
+            const lons = [];
+            const lats = [];
+            for (const i in state.table.LON) {
+                const lon = Number(state.table.LON[i]);
+                const lat = Number(state.table.LAT[i]);
+                if (!seenLon.has(lon)) { seenLon.add(lon); lons.push(lon); }
+                if (!seenLat.has(lat)) { seenLat.add(lat); lats.push(lat); }
+            }
+            if (!lons.length) return;
+            lons.sort((a, b) => a - b);
+            lats.sort((a, b) => a - b);
+
+            const dlon = Contour.gridStep(lons, GRID_FALLBACK_STEP);
+            const dlat = Contour.gridStep(lats, GRID_FALLBACK_STEP);
+            const i0 = Math.round(lons[0] / dlon) - GRID_PAD;
+            const i1 = Math.round(lons[lons.length - 1] / dlon) + GRID_PAD;
+            const j0 = Math.round(lats[0] / dlat) - GRID_PAD;
+            const j1 = Math.round(lats[lats.length - 1] / dlat) + GRID_PAD;
+
+            state.gridGeom = {
+                dlon, dlat, i0, j0,
+                gw: Math.max(2, i1 - i0 + 1),
+                gh: Math.max(2, j1 - j0 + 1),
+                lon0: i0 * dlon,
+                lat0: j0 * dlat,
+            };
+        }
+
+        /** 把当前帧的烟羽画到地图上 */
+        function drawFrame() {
+            const frame = state.frames[state.index];
+            if (!frame) return;
+
+            const points = framePoints(frame);
+            if (!points.length) return;
+
+            const grid = frameGrid(frame, points);
+            drawPlume(grid);
+        }
+
+        function ensurePlumeCanvases() {
+            if (state.plumeSmall) return;
+            const g = state.gridGeom;
+            state.plumeSmall = document.createElement('canvas');
+            state.plumeSmall.width = g.gw;
+            state.plumeSmall.height = g.gh;
+            state.plumeCanvas = document.createElement('canvas');
+            state.plumeCanvas.width = g.gw * PLUME_SCALE;
+            state.plumeCanvas.height = g.gh * PLUME_SCALE;
+            // mapbox 的 canvas 源要求画布在 DOM 里。挪出屏幕藏起来，
+            // 不能 display:none（那样画布内容读不到）
+            state.plumeCanvas.style.cssText =
+                'position:fixed;left:-10000px;top:0;width:1px;height:1px;';
+            document.body.appendChild(state.plumeCanvas);
+        }
+
+        function ensurePlumeLayer() {
+            if (map.getSource('plume-src')) return;
+            const g = state.gridGeom;
+            // 图片边缘外扩半格，格子中心才落在正确的经纬度上
+            const west = g.lon0 - g.dlon / 2;
+            const east = g.lon0 + (g.gw - 1) * g.dlon + g.dlon / 2;
+            const south = g.lat0 - g.dlat / 2;
+            const north = g.lat0 + (g.gh - 1) * g.dlat + g.dlat / 2;
+            map.addSource('plume-src', {
+                type: 'canvas',
+                canvas: state.plumeCanvas,
+                coordinates: [[west, north], [east, north], [east, south], [west, south]],
+                animate: true,
+            });
+            map.addLayer({
+                id: 'plume-layer',
+                type: 'raster',
+                source: 'plume-src',
+                paint: {
+                    'raster-opacity': PLUME_OPACITY,
+                    'raster-resampling': 'linear',
+                },
+            });
+        }
+
+        function drawPlume(grid) {
+            ensurePlumeCanvases();
+            ensurePlumeLayer();
+
+            const g = state.gridGeom;
+            const sctx = state.plumeSmall.getContext('2d');
+            const img = sctx.createImageData(g.gw, g.gh);
+
+            // 颜色按整场量程映射，帧与帧之间色标一致，跟图例、阈值对得上
+            let vmin = Number(state.vMin);
+            let vmax = Number(state.vMax);
+            if (!isFinite(vmin)) vmin = 0;
+            if (!isFinite(vmax) || vmax <= vmin) vmax = vmin + 1;
+            const span = vmax - vmin;
+
+            // 透明度按本帧自身的 lo~hi 归一：补边区（< lo）为 0，
+            // 烟羽边缘自然羽化，核心最实
+            const vr = Math.max(grid.hi - grid.lo, 1e-3);
+
+            for (let j = 0; j < g.gh; j++) {
+                for (let i = 0; i < g.gw; i++) {
+                    const v = grid.values[j * g.gw + i];
+                    const u = (v - grid.lo) / vr;
+                    const a = Math.pow(Math.min(1, Math.max(0, u)), 0.6);
+                    const c = viridis((v - vmin) / span);
+                    // values 行 0 在南边，canvas 行 0 在北边，要翻
+                    const px = ((g.gh - 1 - j) * g.gw + i) * 4;
+                    img.data[px] = Math.round(c[0]);
+                    img.data[px + 1] = Math.round(c[1]);
+                    img.data[px + 2] = Math.round(c[2]);
+                    img.data[px + 3] = Math.round(a * 255);
+                }
+            }
+            sctx.putImageData(img, 0, 0);
+
+            const ctx = state.plumeCanvas.getContext('2d');
+            ctx.clearRect(0, 0, state.plumeCanvas.width, state.plumeCanvas.height);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(state.plumeSmall, 0, 0,
+                state.plumeCanvas.width, state.plumeCanvas.height);
+        }
+
+        // ------------------------------------------------------------------
+        // 危险区等值线（致伤 / 致死）
+        // ------------------------------------------------------------------
+
+        // con2asc 吐出来的浓度点落在 HYSPLIT 的原生浓度网格上（默认 0.05°，
+        // 而且只输出非零格点）。靠这个间距把散点还原成规则网格，才谈得上画等值线。
+        const GRID_FALLBACK_STEP = 0.05;
+        // 数据外圈补几格。不补的话阈值稍低一点等值线就贴着数据边缘被裁断。
+        const GRID_PAD = 5;
+
+        const CONTOUR_STYLE = {
+            lvl1: { line: '#f08c00', fill: '#f08c00', fillOpacity: 0.20, width: 2.5, label: '致伤区' },
+            lvl2: { line: '#c1121f', fill: '#c1121f', fillOpacity: 0.30, width: 3, label: '致死区' },
+        };
+
+        const EMPTY_FC = { type: 'FeatureCollection', features: [] };
+
+        const CONTOUR_LAYERS = [
+            { id: 'contour-fill-lvl1', type: 'fill', src: 'contour-fill-src-lvl1', key: 'lvl1' },
+            { id: 'contour-fill-lvl2', type: 'fill', src: 'contour-fill-src-lvl2', key: 'lvl2' },
+            { id: 'contour-line-lvl1', type: 'line', src: 'contour-line-src-lvl1', key: 'lvl1' },
+            { id: 'contour-line-lvl2', type: 'line', src: 'contour-line-src-lvl2', key: 'lvl2' },
+        ];
+
+        function fmtNum(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '—';
+            if (n === 0) return '0';
+            if (Math.abs(n) < 1e-3 || Math.abs(n) >= 1e5) return n.toExponential(2);
+            return String(Number(n.toPrecision(4)));
+        }
+
+        function contourSourceId(key, kind) {
+            return `contour-${kind}-src-${key}`;
+        }
+
+        function frameGrid(frame, points) {
+            const cached = state.gridCache.get(frame.index);
+            if (cached) return cached;
+            // 网格反推、平滑、外圈补 padding 这些纯计算都放在 contour.js 里，
+            // 跟 FDS 房间页共用一份实现。
+            // 网格几何用会话级固定的（ensureGridGeom），烟羽图和等值线
+            // 才能落在同一张网上。
+            // smooth=2：散点直接等值线会出现一堆孤立碎块，平滑两遍才连得成片。
+            const grid = Contour.gridFromPoints(points, {
+                grid: state.gridGeom,
+                pad: GRID_PAD,
+                step: GRID_FALLBACK_STEP,
+                smooth: 2,
+            });
+            state.gridCache.set(frame.index, grid);
+            return grid;
+        }
+
+        function ringToFeature(ring, grid, asPolygon) {
+            const coords = ring.map(p => [
+                grid.lon0 + p[0] * grid.dlon,
+                grid.lat0 + p[1] * grid.dlat,
+            ]);
+            if (!coords.length) return null;
+            coords.push([coords[0][0], coords[0][1]]);   // GeoJSON 要求闭环
+            return {
+                type: 'Feature',
+                properties: {},
+                geometry: asPolygon
+                    ? { type: 'Polygon', coordinates: [coords] }
+                    : { type: 'LineString', coordinates: coords },
+            };
+        }
+
+        function ensureContourLayers() {
+            for (const def of CONTOUR_LAYERS) {
+                if (!map.getSource(def.src)) {
+                    map.addSource(def.src, { type: 'geojson', data: EMPTY_FC });
+                }
+                if (map.getLayer(def.id)) continue;
+                const st = CONTOUR_STYLE[def.key];
+                if (def.type === 'fill') {
+                    map.addLayer({
+                        id: def.id, type: 'fill', source: def.src,
+                        paint: {
+                            'fill-color': st.fill,
+                            'fill-opacity': st.fillOpacity,
+                        },
+                    });
+                } else {
+                    map.addLayer({
+                        id: def.id, type: 'line', source: def.src,
+                        layout: { 'line-join': 'round', 'line-cap': 'round' },
+                        paint: {
+                            'line-color': st.line,
+                            'line-width': st.width,
+                            'line-opacity': 0.95,
+                        },
+                    });
+                }
+            }
+        }
+
+        /** 把等值线图层抬到烟羽上面，顺序是填充在下、描边在上。 */
+        function raiseContourLayers() {
+            CONTOUR_LAYERS.forEach((def) => {
+                if (map.getLayer(def.id)) map.moveLayer(def.id);
+            });
+        }
+
+        function setContourData(key, kind, features) {
+            const src = map.getSource(contourSourceId(key, kind));
+            if (src) src.setData({ type: 'FeatureCollection', features });
+        }
+
+        function clearContours() {
+            ['lvl1', 'lvl2'].forEach((key) => {
+                setContourData(key, 'fill', []);
+                setContourData(key, 'line', []);
+            });
+        }
+
+        function drawContours() {
+            if (!state.mapReady || typeof Contour === 'undefined') return;
+
+            const frame = state.frames[state.index];
+            const points = frame ? framePoints(frame) : [];
+            if (!frame || !state.showContour || points.length < 3) {
+                clearContours();
+                updateContourLegend(null);
+                return;
+            }
+
+            ensureContourLayers();
+
+            const grid = frameGrid(frame, points);
+            const found = {};
+
+            // 致死区在致伤区里面，所以填充顺序也是从低阈值到高阈值
+            for (const key of ['lvl1', 'lvl2']) {
+                const level = Number(state[key]);
+                if (!isFinite(level)) {
+                    found[key] = null;
+                    setContourData(key, 'fill', []);
+                    setContourData(key, 'line', []);
+                    continue;
+                }
+                // 阈值低到整片数据都在区内，收不了口，硬画只会得到一条锯齿框
+                if (level <= grid.lo) {
+                    found[key] = -1;
+                    setContourData(key, 'fill', []);
+                    setContourData(key, 'line', []);
+                    continue;
+                }
+
+                const rings = Contour.rings(grid.values, grid.gw, grid.gh, level);
+                found[key] = rings.length;
+
+                const polygons = [];
+                const lines = [];
+                for (const ring of rings) {
+                    const smooth = Contour.smoothRing(ring, 2);
+                    const poly = ringToFeature(smooth, grid, true);
+                    const line = ringToFeature(smooth, grid, false);
+                    if (poly) polygons.push(poly);
+                    if (line) lines.push(line);
+                }
+                setContourData(key, 'fill', polygons);
+                setContourData(key, 'line', lines);
+            }
+
+            raiseContourLayers();
+            updateContourLegend(found);
+        }
+
+        function updateContourLegend(found) {
+            const el = $('contourNote');
+            if (!el) return;
+            if (!state.showContour) { el.textContent = '（已隐藏）'; return; }
+            if (!found) { el.textContent = '—'; return; }
+
+            const parts = [];
+            for (const key of ['lvl1', 'lvl2']) {
+                const label = `${CONTOUR_STYLE[key].label} ≥ ${fmtNum(state[key])}`;
+                const n = found[key];
+                if (n === null || n === undefined) parts.push(`${label} 未设`);
+                else if (n < 0) parts.push(`${label} 整片超阈值`);
+                else if (n === 0) parts.push(`${label} 无`);
+                else parts.push(`${label} ${n} 块`);
+            }
+            el.textContent = parts.join('　|　');
+        }
+
+        /** 首次拿到结果时定阈值：优先用会话里存的，没有就按量程取 */
+        function initLevels(res) {
+            if (state.lvlInit) return;
+            const cfg = (res && res.config) || {};
+            let lo = Number(state.vMin);
+            let hi = Number(state.vMax);
+            if (!isFinite(lo)) lo = 0;
+            if (!isFinite(hi) || hi <= lo) hi = lo + 1;
+            const span = hi - lo;
+
+            const pick = (v, fallback) => {
+                // 没存过阈值时是 null，Number(null) 是 0，得先挡掉，
+                // 不然阈值会被初始化成 0，整片数据都成了危险区
+                if (v === null || v === undefined || v === '') return fallback;
+                const n = Number(v);
+                return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
+            };
+            // 没存过阈值就按量程取。0.35 / 0.60 是拿两套真实结果试出来的：
+            // 低一点整片都是危险区，高一点又只剩几个点
+            state.lvl1 = pick(cfg.lvl1, Number((lo + span * 0.35).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.60).toPrecision(4)));
+            $('lvl1Input').value = state.lvl1;
+            $('lvl2Input').value = state.lvl2;
+
+            const step = (span / 100).toPrecision(2);
+            $('lvl1Input').step = step;
+            $('lvl2Input').step = step;
+
+            state.lvlInit = true;
+        }
+
+        /**
+         * 传感器 canvas
+         */
+        function setupCanvasOverlay() {
+            const overlapDiv = document.getElementById('overlap');
+            const mapDiv = document.getElementById('map');
+
+            const existingCanvas = overlapDiv.querySelector('canvas');
+            if (existingCanvas) existingCanvas.remove();
+
+            const canvas = document.createElement('canvas');
+            canvas.id = 'overlayCanvas';
+            overlapDiv.appendChild(canvas);
+            const ctx = canvas.getContext('2d');
+
+            function resizeCanvas() {
+                canvas.width = mapDiv.offsetWidth;
+                canvas.height = mapDiv.offsetHeight;
+            }
+
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            canvas.addEventListener('click', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const lngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+                console.log(`Map coordinates: ${lngLat.lng}, ${lngLat.lat}`);
+            });
+        }
+
+        /**
+         * 拉传感器数据并画到 canvas 上
+         */
+        async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
+            if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
+                throw new Error('有效的canvas元素是必需的');
+            }
+
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+            const sensors = await response.json();
+
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('无法获取canvas上下文');
+
+            const defaultStyles = {
+                humidity: { color: 'rgba(65, 105, 225, 0.8)', radius: 8, borderColor: 'rgba(30, 144, 255, 1)', labelColor: 'black' },
+                temp: { color: 'rgba(220, 20, 60, 0.8)', radius: 10, borderColor: 'rgba(255, 69, 0, 1)', labelColor: 'black' },
+                default: { color: 'rgba(50, 205, 50, 0.8)', radius: 8, borderColor: 'rgba(34, 139, 34, 1)', labelColor: 'black' },
+                fontSize: 12,
+                fontFamily: 'Arial'
+            };
+            const styles = { ...defaultStyles, ...customStyles };
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            sensors.forEach(sensor => drawSingleSensor(ctx, canvas, sensor, styles));
+            return sensors;
+        }
+
+        function drawSingleSensor(ctx, canvas, sensor, styles) {
+            const sensorId = (sensor.sensor_id || '').toLowerCase();
+            let type = 'default';
+            if (sensorId.includes('humidity')) type = 'humidity';
+            else if (sensorId.includes('temp')) type = 'temp';
+            const style = styles[type] || styles.default;
+
+            // 与 simulate.py 里的 BBOX 保持一致
+            const lat1 = 30, lat2 = 31, lon1 = 110, lon2 = 111;
+            const lat = (1 - sensor.y_position) * (lat2 - lat1) + lat1;
+            const lon = sensor.x_position * (lon2 - lon1) + lon1;
+
+            if (sensorId in mapMarkers) {
+                const { el } = mapMarkers[sensorId];
+                const v = (typeof sensor.value === 'number') ? sensor.value.toFixed(4) : '—';
+                el.innerHTML = '<div>' + sensor.sensor_id + '</div><div>' + v + '</div>';
+            } else {
+                const el = document.createElement('div');
+                el.innerHTML = sensor.sensor_id;
+                const marker = new mapboxgl.Marker({ color: style.color, scale: 1.0 })
+                    .setLngLat([lon, lat]).addTo(map);
+                const tMarker = new mapboxgl.Marker({ element: el, color: style.color, anchor: 'top', scale: 1.0 })
+                    .setLngLat([lon, lat]).addTo(map);
+                mapMarkers[sensorId] = Object.assign({}, { marker, el, tMarker });
+            }
+        }
+
+        function setupCanvasOverlay1() {
+            const canvas = document.getElementById('overlayCanvas');
+
+            drawSensorsOnCanvas('/latest_sensor_data', canvas)
+                .then(sensors => console.log(`绘制了 ${sensors.length} 个传感器`))
+                .catch(e => console.warn('传感器绘制失败', e));
+
+            setInterval(() => {
+                drawSensorsOnCanvas('/latest_sensor_data', canvas)
+                    .catch(() => { });
+            }, 5000);
+        }
+    </script>
+</body>
+
+</html>
