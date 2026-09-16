@@ -61,6 +61,13 @@ from hysplit.simulate import (
     WIND_DIRECTIONS,
     LOCATION_CANDIDATES,
 )
+from hysplit_gaussian.simulate import (
+    simulate_with_hysplit_gaussian,
+    get_hysplit_gaussian_simulation_result,
+    get_hysplit_gaussian_simulation_template,
+    list_hysplit_gaussian_simulations,
+    simulation_dir as hysplit_gaussian_simulation_dir,
+)
 
 # %%
 PROJECT = OmegaConf.load('conf/project.yml')
@@ -1798,6 +1805,22 @@ def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', 
     return HTMLResponse(content=html_content)
 
 
+@app.get('/map_gaussian')
+def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
+    """高斯模型的结果地图页，与 /map 同构，接口指向 hysplitGaussian。"""
+    print(f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}')
+    html_content = Path('static/html/map_gaussian.html').read_text(encoding='utf-8')
+    changes = {
+        '"{{zoom}}"': zoom,
+        '"{{lat}}"': lat,
+        '"{{lon}}"': lon,
+        '{{session}}': session,
+    }
+    for k, v in changes.items():
+        html_content = html_content.replace(k, v)
+    return HTMLResponse(content=html_content)
+
+
 @app.get('/room')
 def show_room(session: str = '???'):
     # params = dict(request.query_params)
@@ -1939,6 +1962,52 @@ async def get_hysplit_simulation_table_json_page(session: str):
 async def get_hysplit_simulation_template_page(session: str):
     """把该次模拟实际用的 CONTROL 传回去（前端可查看原文）。"""
     text = get_hysplit_simulation_template(session)
+    if not text:
+        return HTMLResponse('Not found', status_code=404)
+    return HTMLResponse(text, media_type='text/plain; charset=utf-8')
+
+
+# ---------------------------------------------------------------------------
+# hysplit gaussian（高斯模型，与拉格朗日唯一区别是 SETUP.CFG 的 initd = 3）
+@ui.page('/get_hysplit_gaussian_simulation_result/{session}')
+async def get_hysplit_gaussian_simulation_result_page(session: str):
+    """一次模拟的完整状态：status / frames / environment / config。"""
+    obj = get_hysplit_gaussian_simulation_result(session)
+    return HTMLResponse(json.dumps(obj, ensure_ascii=False),
+                        media_type='application/json')
+
+
+@ui.page('/get_hysplit_gaussian_simulation_frame')
+async def get_hysplit_gaussian_simulation_frame_page(session: str, frame: str):
+    if any(e in frame for e in ('/', '\\', '..')):
+        return HTMLResponse('Bad request', status_code=400)
+    try:
+        p = hysplit_gaussian_simulation_dir(session) / 'img' / frame
+    except ValueError:
+        return HTMLResponse('Bad request', status_code=400)
+    if not p.is_file():
+        return HTMLResponse('File not found', status_code=404)
+    return FileResponse(p, media_type='image/png')
+
+
+@ui.page('/get_hysplit_gaussian_simulation_table_json')
+async def get_hysplit_gaussian_simulation_table_json_page(session: str):
+    try:
+        p = hysplit_gaussian_simulation_dir(session) / 'table.json'
+    except ValueError:
+        return HTMLResponse(json.dumps({}), media_type='application/json')
+
+    if not p.is_file():
+        return HTMLResponse(json.dumps({}), media_type='application/json')
+
+    obj = json.loads(p.read_text(encoding='utf-8'))
+    return HTMLResponse(json.dumps(obj), media_type='application/json')
+
+
+@ui.page('/get_hysplit_gaussian_simulation_template')
+async def get_hysplit_gaussian_simulation_template_page(session: str):
+    """把该次模拟实际用的 CONTROL 传回去（前端可查看原文）。"""
+    text = get_hysplit_gaussian_simulation_template(session)
     if not text:
         return HTMLResponse('Not found', status_code=404)
     return HTMLResponse(text, media_type='text/plain; charset=utf-8')
@@ -2970,6 +3039,330 @@ async def simulation_page_hysplit():
     <iframe
         id="map-iframe"
         src="/map"
+        style="width: 800px; height: 800px; border: none;"
+        title="地图"
+    ></iframe>
+</div>
+''', sanitize=False)
+
+    return
+
+
+@ui.page('/simulationGaussian')
+@with_layout_full_width
+async def simulation_page_gaussian():
+    with ui.row().classes('w-[1200px] justify-center items-end gap-2'):
+        simulate_button = ui.button(
+            '开始高斯模型计算', icon='play_arrow').props('color=primary')
+
+        simulation_history_select = ui.select(
+            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+        refresh_history_button = ui.button('刷新历史', icon='refresh').props(
+            'flat dense')
+        status_label = ui.label('').classes('text-sm text-gray-600')
+
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    # Simulation history
+    def refresh_status(session='???'):
+        """把该会话的状态 / 帧数 / 备注显示到标签上。"""
+        if not session or session == '???':
+            status_label.text = ''
+            return
+        info = get_hysplit_gaussian_simulation_result(session)
+        mapping = {'success': '完成', 'failed': '失败', 'pending': '计算中'}
+        note = (info.get('note') or '').replace('\n', ' · ')
+        status_label.text = (
+            f"{session} · {mapping.get(info['status'], info['status'])}"
+            f" · {info['n_frames']} 帧" + (f" · {note}" if note else ''))
+
+    def on_select_session(e):
+        if e.value:
+            update_map(session=e.value)
+            refresh_status(e.value)
+
+    def session_options():
+        mapping = {'success': '完成', 'failed': '失败', 'pending': '计算中'}
+        options = {}
+        for entry in list_hysplit_gaussian_simulations():
+            state = mapping.get(entry['status'], entry['status'])
+            options[entry['session']] = (
+                f"{entry['session']}  ·  {state}  ·  {entry['n_frames']} 帧"
+                + value_range_suffix(entry))
+        return options
+
+    def update_simulation_history():
+        simulation_history_select.options = session_options()
+        simulation_history_select.update()
+
+    update_simulation_history()
+    simulation_history_select.on_value_change(on_select_session)
+
+    def on_refresh_history():
+        update_simulation_history()
+        refresh_status(simulation_history_select.value)
+
+    refresh_history_button.on('click', on_refresh_history)
+
+    # Simulate button action
+    def collect_config():
+        """收集界面参数。气象部分对计算结果没有影响，随运行存档。"""
+        return {
+            'location': location_select.value,
+            'weather': weather_conditions.value,
+            'temperature': float(temperature.value or 0),
+            'humidity': float(humidity.value or 0),
+            'wind_speed': float(wind_speed.value or 0),
+            'wind_direction': wind_direction.value,
+            'year': int(year_input.value or 0),
+            'month': int(month_input.value or 0),
+            'day': int(day_input.value or 0),
+            'start_hour': int(start_hour_input.value or 0),
+            'duration_hours': int(duration_input.value or 0),
+            'lvl1': opt_number(lvl1_input.value),
+            'lvl2': opt_number(lvl2_input.value),
+        }
+
+    def on_click():
+        reader = SensorDataReader()
+        sensors = reader.get_sensor_info()
+        for s in sensors:
+            try:
+                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
+            except:
+                pass
+
+        session = simulate_with_hysplit_gaussian(sensors, config=collect_config())
+        update_map(session=session)
+        update_simulation_history()
+        refresh_status(session)
+
+        ui.notify(
+            f'模拟已在后台开始，Session: {session}', color='positive')
+
+    simulate_button.on('click', on_click)
+
+    gases = gas_db.search_gases()
+    geo_candidates = LOCATION_CANDIDATES
+    default_zoom = 4
+
+    # 左侧：地理 / 气象 / 计算设置
+    with weather_card:
+        ui.label('地理位置').classes('text-h6 mb-4')
+
+        location_select = ui.select(
+            options=list(geo_candidates.keys()),
+            value='北京',
+            label='选择地点'
+        ).classes('w-full')
+
+        zoom_input = ui.number(
+            value=default_zoom,
+            min=1,
+            max=20,
+            step=1,
+            precision=0,
+            label='地图缩放级别'
+        ).classes('w-full')
+
+        ui.label('气象条件').classes('text-h6 mb-4')
+
+        weather_conditions = ui.select(
+            options=WEATHER_OPTIONS, value='晴',
+            label='天气状况'
+        ).classes('w-full mb-2')
+
+        temperature = ui.number(
+            label='温度(℃)', value=20, min=-50, max=50
+        ).classes('w-full mb-2')
+
+        humidity = ui.number(
+            label='湿度(%)', value=50, min=0, max=100
+        ).classes('w-full mb-2')
+
+        wind_speed = ui.number(
+            label='风力(级)', value=3, min=0, max=12
+        ).classes('w-full mb-2')
+
+        wind_direction = ui.select(
+            options=WIND_DIRECTIONS, value='东',
+            label='风向'
+        ).classes('w-full')
+
+        # ---- 真正决定计算的参数 ----
+        ui.label('计算设置').classes('text-h6 mt-4 mb-2')
+        with ui.grid(columns=2).classes('w-full gap-1'):
+            year_input = ui.number(
+                '年', value=2024, min=1900, max=2100, step=1, precision=0
+            ).props('dense outlined')
+            month_input = ui.number(
+                '月', value=5, min=1, max=12, step=1, precision=0
+            ).props('dense outlined')
+            day_input = ui.number(
+                '日', value=2, min=1, max=31, step=1, precision=0
+            ).props('dense outlined')
+            start_hour_input = ui.number(
+                '起始时', value=0, min=0, max=23, step=1, precision=0
+            ).props('dense outlined')
+
+        duration_input = ui.number(
+            '模拟时长 (h)', value=24, min=1, max=240, step=1, precision=0
+        ).classes('w-full mt-1').props('dense outlined')
+
+        # 危险区阈值只影响「怎么看结果」，不影响 HYSPLIT 计算。
+        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        ui.label('危险区阈值（等值线）').classes('text-h6 mt-4 mb-2')
+        lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+                               ).classes('w-full mb-2').props('dense outlined clearable')
+        lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+                               ).classes('w-full').props('dense outlined clearable')
+        ui.label('阈值与色标同单位（log10 相对值）').classes(
+            'text-xs text-gray-500 mt-1')
+
+        met_label = ui.label('').classes('text-xs text-gray-500 mt-2')
+
+        def show_met_file():
+            """实时显示该日期会用到哪个 gdas1 文件，找不到就提示。"""
+            try:
+                d, n = resolve_met_file(int(year_input.value or 0),
+                                        int(month_input.value or 0),
+                                        int(day_input.value or 0))
+            except Exception:
+                met_label.text = ''
+                return
+            met_label.text = (f'气象文件：{n}' if d is not None
+                              else f'⚠ 找不到气象文件 {n}，该日期无法计算')
+
+        for widget in (year_input, month_input, day_input):
+            widget.on_value_change(lambda e=None: show_met_file())
+        show_met_file()
+
+    # 右侧气体信息显示
+    with gas_card:
+        ui.label('气体属性').classes('text-h6 mb-4')
+
+        gas_select = ui.select(
+            options=[g['气体名称'] for g in gases],
+            value=gases[0]['气体名称'] if gases else None,
+            label='选择气体'
+        ).classes('w-full mb-6')
+
+        # 气体属性输入字段（字符串类型）
+        gas_name_input = ui.input(label='气体名称').classes(
+            'w-full mb-2').props('readonly')
+        toxicity_input = ui.input(label='毒性等级').classes('w-full mb-2')
+        idlh_input = ui.input(label='IDLH浓度').classes('w-full mb-2')
+        mac_input = ui.input(label='MAC浓度').classes('w-full mb-2')
+        safe_threshold_input = ui.input(label='安全阈值').classes('w-full mb-2')
+        warning_concentration_input = ui.input(
+            label='警戒浓度').classes('w-full mb-2')
+        danger_concentration_input = ui.input(
+            label='危险浓度').classes('w-full mb-2')
+
+        # 将输入字段存储到字典中以便访问
+        gas_inputs = {
+            '气体名称': gas_name_input,
+            '毒性等级': toxicity_input,
+            'IDLH浓度': idlh_input,
+            'MAC浓度': mac_input,
+            '安全阈值': safe_threshold_input,
+            '警戒浓度': warning_concentration_input,
+            '危险浓度': danger_concentration_input
+        }
+
+        # 添加保存按钮（如果需要保存修改）
+        # ui.button('保存修改', on_click=lambda: save_gas_changes(gas_inputs)).classes('w-full mt-4')
+
+    def update_gas_inputs():
+        """当气体选择改变时，填充所有输入字段"""
+        selected_gas_name = gas_select.value
+        if not selected_gas_name:
+            # 清空所有输入字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+            return
+
+        # 查找选中的气体信息
+        gas_info = next(
+            (e for e in gases if e['气体名称'] == selected_gas_name), None)
+
+        if gas_info:
+            # 将所有值转换为字符串并填充到输入字段中
+            gas_inputs['气体名称'].value = str(gas_info.get('气体名称', ''))
+            gas_inputs['毒性等级'].value = str(gas_info.get('毒性等级', ''))
+            gas_inputs['IDLH浓度'].value = str(gas_info.get('IDLH浓度', ''))
+            gas_inputs['MAC浓度'].value = str(gas_info.get('MAC浓度', ''))
+            gas_inputs['安全阈值'].value = str(gas_info.get('安全阈值', ''))
+            gas_inputs['警戒浓度'].value = str(gas_info.get('警戒浓度', ''))
+            gas_inputs['危险浓度'].value = str(gas_info.get('危险浓度', ''))
+
+            # 可选：根据字段类型设置输入类型
+            set_input_attributes(gas_info)
+        else:
+            # 如果找不到气体，清空所有字段
+            for input_field in gas_inputs.values():
+                input_field.value = ''
+
+    def set_input_attributes(gas_info):
+        """根据数据类型设置输入属性"""
+        # 对于数值字段，可以设置输入类型
+        concentration_fields = ['IDLH浓度', 'MAC浓度', '安全阈值', '警戒浓度', '危险浓度']
+
+        for field in concentration_fields:
+            value = gas_info.get(field)
+            input_field = gas_inputs[field]
+
+            if isinstance(value, (int, float)):
+                # 设置为数字输入
+                input_field.props('type=number step=any')
+                # 可选：添加单位后缀
+                if field in ['IDLH浓度', 'MAC浓度', '警戒浓度', '危险浓度']:
+                    input_field.props(f'suffix=ppm')
+            else:
+                input_field.props('')
+
+    # 连接选择器变化事件
+    gas_select.on('update:model-value', update_gas_inputs)
+
+    # 初始填充（只在页面加载时执行一次）
+    if gases:
+        update_gas_inputs()
+
+    def update_map(session='???'):
+        # 获取选择的地点
+        selected_location = location_select.value
+        if selected_location in geo_candidates:
+            geo = geo_candidates[selected_location]
+            zoom = zoom_input.value if zoom_input.value else geo['zoom']
+
+            # 构建包含参数的 URL
+            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}&session={session}"
+
+            # 更新 iframe 的 src 属性
+            js_code = f"""
+            var iframe = document.getElementById('map-iframe');
+            if (iframe) {{
+                iframe.src = '/map_gaussian?{params}';
+            }}
+            """
+            ui.run_javascript(js_code)
+
+    # 绑定选择框变化事件
+    # location_select.on_change(update_map)
+    location_select.on('update:model-value', update_map)
+    zoom_input.on_value_change(update_map)
+
+    with map_card:
+        # 嵌入iframe来显示地图页面
+        iframe = ui.html(f'''
+<div id='mapdiv'>
+    <iframe
+        id="map-iframe"
+        src="/map_gaussian"
         style="width: 800px; height: 800px; border: none;"
         title="地图"
     ></iframe>
