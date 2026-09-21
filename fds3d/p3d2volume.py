@@ -108,6 +108,20 @@ def frame_shape(df: pd.DataFrame) -> tuple:
     return int(nx), int(ny), int(nz)
 
 
+def frame_bounds(df: pd.DataFrame) -> list:
+    """从帧坐标实测计算域 XB。
+
+    config 里的 xb 可能是 UI 带进来的旧默认值（甲方自带完整 FDS 时
+    根本没走渲染流程），体块的实际范围必须以数据自身坐标为准，
+    否则整个域会被压进一个错误大小的小盒子里，模型全都对不上。
+    """
+    return [
+        float(df['x'].min()), float(df['x'].max()),
+        float(df['y'].min()), float(df['y'].max()),
+        float(df['z'].min()), float(df['z'].max()),
+    ]
+
+
 def downsample_axis(n: int, stride: int) -> np.ndarray:
     """等间隔取 n/stride 个点，首尾都留着，体块才铺满计算域。"""
     m = max(2, int(round(n / stride)))
@@ -129,6 +143,9 @@ if __name__ == '__main__':
     df0 = read_frame(first, value_col)
     nx, ny, nz = frame_shape(df0)
     print(f'nodes: {nx} x {ny} x {nz} = {nx * ny * nz}')
+    # 计算域 XB 以帧坐标实测为准；config 里的 xb 只做兜底（老数据没坐标时）
+    xb = frame_bounds(df0)
+    print(f'bounds: {xb}')
 
     stride = 1
     while (nx // stride) * (ny // stride) * (nz // stride) > MAX_VOXELS:
@@ -204,7 +221,7 @@ if __name__ == '__main__':
         'v_max': g_max,
         'ijk': [out_nx, out_ny, out_nz],
         'ijk_full': [nx, ny, nz],
-        'xb': cfg.get('xb'),
+        'xb': xb or cfg.get('xb'),
         'downsample': stride,
     }
     Path(FRAMES_NAME).write_text(

@@ -34,18 +34,6 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from fds.simulate import (
-    SPEC_ID_BY_GAS_NAME,
-    SPEC_ID_OPTIONS,
-    guess_spec_id,
-    _clamp,
-    _fds_id,
-    _fk,
-    _num,
-    _snap_span,
-    assert_within_domain,
-)
-
 from fds.parse_fds import parse_fds_environment, read_devc_series
 
 
@@ -124,260 +112,23 @@ def mk_fds3d_session() -> str:
     return '-'.join([now.strftime('%Y-%m-%d-%H-%M-%S'), str(uuid.uuid4())])
 
 
-def _mk_chid(session: str) -> str:
-    """把 session 压成 FDS 能接受的 CHID（只留字母数字）。"""
-    flat = re.sub(r'[^0-9a-zA-Z]', '', session)
-    return ('fds3d' + flat)[:30]
-
-
-def fds_bin_dir() -> str:
-    """本机 FDS bin 目录，找不到返回空串。"""
-    for p in FDS_BIN_CANDIDATES:
-        if p.is_dir():
-            return str(p)
-    return ''
-
-
-def merge_config(config: dict = None) -> dict:
-    """把用户配置并到默认值上，None 表示“用默认值”。"""
-    return {**DEFAULT_CONFIG,
-            **{k: v for k, v in (config or {}).items() if v is not None}}
-
-
-def render_fds3d(template_text: str, cfg: dict, sensors: list,
-                 session: str) -> str:
-    """把 template3d.fds 里的占位符填成一次具体模拟的输入文件。
-
-    几何部分跟二维版本完全一套做法（传感器吸到网格面、六面墙、DEVC），
-    区别只有体数据输出：DUMP 里 DT_PL3D 用「体数据输出间隔」，
-    这样一次模拟能落好几帧体数据给前端做动画。
-    """
-    chid = _mk_chid(session)
-    spec_id = str(cfg.get('spec_id') or '').strip()
-    if not spec_id:
-        raise ValueError('FDS 组分名 (SPEC_ID) 不能为空。')
-
-    t_end = _num(cfg.get('t_end'), 20.0)
-    dt = _num(cfg.get('dt'), 0.5)
-    dt_pl3d = _num(cfg.get('dt_pl3d'), 2.0)
-    slice_z = _num(cfg.get('slice_z'), 1.5)
-
-    if t_end <= 0:
-        raise ValueError('模拟时长 T_END 必须大于 0。')
-    if dt <= 0:
-        raise ValueError('DEVC/SLCF 输出间隔必须大于 0。')
-    if dt_pl3d <= 0:
-        raise ValueError('体数据输出间隔必须大于 0。')
-
-    n_vol = int(t_end / dt_pl3d) + 1
-    if n_vol > MAX_VOLUME_FRAMES:
-        raise ValueError(
-            f'模拟时长 {t_end}s / 体数据间隔 {dt_pl3d}s 会产出 {n_vol} 帧体数据，'
-            f'超过上限 {MAX_VOLUME_FRAMES}，请调大间隔或缩短时长。')
-
-    xb = list(cfg['xb'])
-    ijk = list(cfg['ijk'])
-    if len(xb) != 6:
-        raise ValueError('计算域 XB 需要 6 个数。')
-    if len(ijk) != 3:
-        raise ValueError('网格数 IJK 需要 3 个数。')
-
-    x0, x1, y0, y1, z0, z1 = [_num(e) for e in xb]
-    nx, ny, nz = [max(1, int(_num(e, 1))) for e in ijk]
-    if nx * ny * nz > MAX_CELLS:
-        raise ValueError(
-            f'网格 {nx}×{ny}×{nz} = {nx * ny * nz} 格，超过上限 {MAX_CELLS}。'
-            f'三维体数据每格都要落盘，请把网格调粗一些。')
-
-    dx = (x1 - x0) / nx
-    dy = (y1 - y0) / ny
-    dz = (z1 - z0) / nz
-
-    # 切片高度吸附到某一层的中心
-    k = int(_clamp((slice_z - z0) / dz, 0, nz - 1))
-    slice_z = z0 + (k + 0.5) * dz
-
-    # ---- 传感器 -> SURF / OBST / VENT ----
-    surfs, obsts, source_vents = [], [], []
-
-    def span(origin, size, i, j):
-        return f'{_fk(origin + i * size)},{_fk(origin + j * size)}'
-
-    for sensor in sensors or []:
-        value = sensor.get('value')
-        if value is None:
+def _parse_dt_pl3d(text: str):
+    """从 &DUMP 里取 DT_PL3D，没有返回 None。"""
+    from fds.parse_fds import iter_namelists, parse_namelist
+    for name, body in iter_namelists(text):
+        if name != 'DUMP':
             continue
-
-        sx = _clamp(x0 + _num(sensor.get('x_position')) * (x1 - x0), x0, x1)
-        sy = _clamp(y0 + _num(sensor.get('y_position')) * (y1 - y0), y0, y1)
-        mass_flux = _num(value) * 10
-
-        sid = _fds_id(sensor.get('sensor_id'), 'Sensor')
-        name = re.sub(r'\s+', '_', sid)
-
-        surfs.append(
-            f"&SURF ID='{name}_SURF',\n"
-            f"      COLOR='RED',\n"
-            f"      MASS_FLUX={_fk(mass_flux)},\n"
-            f"      SPEC_ID='{spec_id}',\n"
-            f"      TAU_MF=1.0/"
-        )
-
-        ox = _snap_span(sx - 0.3, sx, x0, dx, nx)
-        oy = _snap_span(sy - 0.1, sy + 0.4, y0, dy, ny)
-        oz1 = int(_clamp(round((min(2.0, z1) - z0) / dz), 1, nz))
-        if ox[1] > ox[0] and oy[1] > oy[0]:
-            obsts.append(
-                f"&OBST ID='Obst #{name}',\n"
-                f"      XB={span(x0, dx, *ox)},{span(y0, dy, *oy)},"
-                f"{_fk(z0)},{_fk(z0 + oz1 * dz)},\n"
-                f"      SURF_ID='CONVERTER_SURF'/"
-            )
-
-        # 泄漏面贴在障碍物朝 +x 的面上
-        vy = _snap_span(sy, sy + 0.3, y0, dy, ny)
-        if ox[1] > ox[0] and vy[1] > vy[0]:
-            vx = x0 + ox[1] * dx
-            source_vents.append(
-                f"&VENT ID='Vent #{name}',\n"
-                f"      SURF_ID='{name}_SURF',\n"
-                f"      XB={_fk(vx)},{_fk(vx)},{span(y0, dy, *vy)},"
-                f"{_fk(z0 + k * dz)},{_fk(z0 + (k + 1) * dz)}/"
-            )
-
-    # ---- 用户自定义障碍物 ----
-    for i, obst in enumerate(cfg.get('obstacles') or []):
-        ob = list(obst.get('xb') or [])
-        if len(ob) != 6:
-            continue
-        bx = _snap_span(_num(ob[0]), _num(ob[1]), x0, dx, nx)
-        by = _snap_span(_num(ob[2]), _num(ob[3]), y0, dy, ny)
-        bz = _snap_span(_num(ob[4]), _num(ob[5]), z0, dz, nz)
-        if bx[1] <= bx[0] or by[1] <= by[0] or bz[1] <= bz[0]:
-            continue
-        obsts.append(
-            f"&OBST ID='{_fds_id(obst.get('id'), f'Obst {i + 1}')}',\n"
-            f"      XB={span(x0, dx, *bx)},{span(y0, dy, *by)},"
-            f"{span(z0, dz, *bz)},\n"
-            f"      SURF_ID='{_fds_id(obst.get('surf_id') or 'CONVERTER_SURF')}'/"
-        )
-
-    # ---- 计算域六面 ----
-    walls = [
-        f"&VENT ID='WALL_XMIN_SUPPLY',\n"
-        f"      SURF_ID='Supply',\n"
-        f"      XB={_fk(x0)},{_fk(x0)},{_fk(y0)},{_fk(y1)},{_fk(z0)},{_fk(z1)}/",
-        f"&VENT ID='WALL_XMAX_OPEN',\n"
-        f"      SURF_ID='OPEN',\n"
-        f"      XB={_fk(x1)},{_fk(x1)},{_fk(y0)},{_fk(y1)},{_fk(z0)},{_fk(z1)}/",
-        f"&VENT ID='WALL_YMIN_OPEN',\n"
-        f"      SURF_ID='OPEN',\n"
-        f"      XB={_fk(x0)},{_fk(x1)},{_fk(y0)},{_fk(y0)},{_fk(z0)},{_fk(z1)}/",
-        f"&VENT ID='WALL_YMAX_OPEN',\n"
-        f"      SURF_ID='OPEN',\n"
-        f"      XB={_fk(x0)},{_fk(x1)},{_fk(y1)},{_fk(y1)},{_fk(z0)},{_fk(z1)}/",
-        f"&VENT ID='WALL_ZMIN_CLOSED',\n"
-        f"      SURF_ID='WALL_SURF',\n"
-        f"      XB={_fk(x0)},{_fk(x1)},{_fk(y0)},{_fk(y1)},{_fk(z0)},{_fk(z0)}/",
-        f"&VENT ID='WALL_ZMAX_OPEN',\n"
-        f"      SURF_ID='OPEN',\n"
-        f"      XB={_fk(x0)},{_fk(x1)},{_fk(y0)},{_fk(y1)},{_fk(z1)},{_fk(z1)}/",
-    ]
-
-    assert_within_domain(obsts + source_vents + walls,
-                         [x0, x1, y0, y1, z0, z1], '障碍物/通风口')
-
-    # ---- 检测点 ----
-    devices = []
-    for i, dev in enumerate(cfg.get('devices') or []):
-        dx_ = _clamp(_num(dev.get('x'), 1.0), x0, x1)
-        dy_ = _clamp(_num(dev.get('y'), 1.0), y0, y1)
-        dz_ = _clamp(_num(dev.get('z'), slice_z), z0, z1)
-        devices.append(
-            f"&DEVC ID='{_fds_id(dev.get('id'), f'DEVC {i + 1}')}',\n"
-            f"      QUANTITY='VOLUME FRACTION',\n"
-            f"      SPEC_ID='{spec_id}',\n"
-            f"      XYZ={_fk(dx_)},{_fk(dy_)},{_fk(dz_)}/"
-        )
-
-    # ---- 切片：三维主体是体数据，这里只留一张气体切片便于对照 ----
-    slices = [
-        f"&SLCF QUANTITY='VOLUME FRACTION',\n"
-        f"      SPEC_ID='{spec_id}',\n"
-        f"      PBZ={_fk(slice_z)}/"
-    ]
-    if cfg.get('velocity_slice'):
-        slices.append(
-            f"&SLCF QUANTITY='VELOCITY',\n"
-            f"      VECTOR=.TRUE.,\n"
-            f"      PBZ={_fk(slice_z)}/"
-        )
-
-    mesh = (f"&MESH ID='Mesh01', IJK={nx},{ny},{nz}, "
-            f"XB={_fk(x0)},{_fk(x1)},{_fk(y0)},{_fk(y1)},{_fk(z0)},{_fk(z1)}/")
-
-    replacements = {
-        '{{CHID}}': chid,
-        '{{SESSION}}': session,
-        '{{GENERATED_AT}}': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        '{{TITLE}}': _fds_id(cfg.get('title') or f'ForceProject3D {session}'),
-        '{{T_END}}': _fk(t_end),
-        '{{DT_DEVC}}': _fk(dt),
-        '{{DT_SLCF}}': _fk(dt),
-        '{{DT_BNDF}}': _fk(dt * 2),
-        '{{DT_PL3D}}': _fk(dt_pl3d),
-        '{{DT_RESTART}}': _fk(t_end + 1),
-        '{{SPEC_ID}}': spec_id,
-        '{{MESH}}': mesh,
-        '{{SPEC}}': str(cfg.get('extra_spec') or '').strip(),
-        '{{DEVC}}': '\n'.join(devices),
-        '{{SURF}}': '\n'.join(surfs),
-        '{{OBST}}': '\n'.join(obsts),
-        '{{VENT}}': '\n'.join(walls + source_vents),
-        '{{SLCF}}': '\n'.join(slices),
-    }
-
-    text = template_text
-    for key, value in replacements.items():
-        text = text.replace(key, str(value))
-
-    leftovers = re.findall(r'\{\{[A-Z_]+\}\}', text)
-    if leftovers:
-        raise ValueError(f'template3d.fds 里有没填的占位符: {leftovers}')
-
-    # 吸附后的真实值写回配置，落盘后前端读到的和跑的一致
-    cfg['slice_z'] = round(slice_z, 6)
-    cfg['ijk'] = [nx, ny, nz]
-    cfg['xb'] = [x0, x1, y0, y1, z0, z1]
-    cfg['n_volume_frames'] = n_vol
-    cfg['cells'] = nx * ny * nz
-
-    return text
+        vals = parse_namelist(body).get('DT_PL3D')
+        if vals:
+            try:
+                return float(vals[0])
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
-def simulate_with_fds3d(sensors: list, config: dict = None) -> str:
-    """渲染输入文件、开跑 FDS 三维流程，返回 session。
-
-    流程（run3d.ps1）：fds -> fds2ascii(PL3D) -> 体数据二进制。
-    函数本身不等它跑完，run3d.ps1 结束时写 success / failed 标记。
-    """
-    session = mk_fds3d_session()
-    cfg = merge_config(config)
-
-    # 先把输入文件渲染好，配置不合法就直接抛错，不留下半个空目录
-    template_text = TEMPLATE_PATH.read_text(encoding='utf-8')
-    fds_text = render_fds3d(template_text, cfg, sensors, session)
-
-    dst = SIMULATION_DIR / session
-    dst.mkdir(parents=True, exist_ok=True)
-
-    (dst / FDS_INPUT_NAME).write_text(fds_text, encoding='utf-8')
-    (dst / SENSORS_NAME).write_text(
-        json.dumps(sensors or [], ensure_ascii=False, indent=2),
-        encoding='utf-8')
-    (dst / CONFIG_NAME).write_text(
-        json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
-
+def _spawn_run3d(dst: Path):
+    """后台拉起 run3d.ps1：fds -> fds2ascii -> 体数据 -> 标记文件。"""
     stdout = open(dst / 'stdout.txt', 'w', encoding='utf-8', errors='replace')
     stderr = open(dst / 'stderr.txt', 'w', encoding='utf-8', errors='replace')
     _OPEN_LOGS.extend([stdout, stderr])
@@ -396,6 +147,125 @@ def simulate_with_fds3d(sensors: list, config: dict = None) -> str:
         start_new_session=True,
     )
 
+
+def fds_bin_dir() -> str:
+    """本机 FDS bin 目录，找不到返回空串。"""
+    for p in FDS_BIN_CANDIDATES:
+        if p.is_dir():
+            return str(p)
+    return ''
+
+
+def merge_config(config: dict = None) -> dict:
+    """把用户配置并到默认值上，None 表示“用默认值”。"""
+    return {**DEFAULT_CONFIG,
+            **{k: v for k, v in (config or {}).items() if v is not None}}
+
+
+def get_fds3d_default_template() -> str:
+    """编辑器预填用的默认 FDS 文本（template3d.fds 原文）。"""
+    if not TEMPLATE_PATH.is_file():
+        return ''
+    return TEMPLATE_PATH.read_text(encoding='utf-8', errors='replace')
+
+
+def validate_fds_text(fds_text: str) -> dict:
+    """校验用户写的完整 FDS 文本，返回解析摘要；不合法直接抛 ValueError。
+
+    校验项：MESH 可识别且不超网格上限、T_END / DT_PL3D 有效且帧数不超上限、
+    SPEC 存在。前端「解析 FDS」和提交模拟共用这一份逻辑。
+    """
+    text = str(fds_text or '').strip()
+    if not text:
+        raise ValueError('FDS 输入内容为空，请先在编辑器里粘贴或编写 FDS。')
+
+    env = parse_fds_environment(text)
+    mesh = env.get('mesh') or {}
+    xb, ijk = mesh.get('xb'), mesh.get('ijk')
+    if not xb or not ijk:
+        raise ValueError('FDS 里没有可识别的 &MESH（XB/IJK），无法计算。')
+    if len(env.get('meshes') or []) > 1:
+        raise ValueError('暂只支持单个 &MESH 的输入文件，请合并网格。')
+
+    nx, ny, nz = ijk
+    warnings = []
+    if nx * ny * nz > MAX_CELLS:
+        raise ValueError(
+            f'网格 {nx}×{ny}×{nz} = {nx * ny * nz} 格，超过上限 {MAX_CELLS}。'
+            f'体数据每格都要落盘导出，请把网格调粗一些。')
+    if nx * ny * nz > MAX_CELLS / 2:
+        warnings.append(
+            f'网格 {nx}×{ny}×{nz} 接近上限，PL3D 导出会比较慢，'
+            f'建议单轴不超过 100。')
+
+    t_end = env.get('t_end')
+    if not t_end or t_end <= 0:
+        raise ValueError('FDS 里没有有效的 &TIME T_END。')
+
+    # DUMP 里的 DT_PL3D 决定体数据帧数
+    dt_pl3d = _parse_dt_pl3d(text)
+    if not dt_pl3d or dt_pl3d <= 0:
+        raise ValueError('FDS 的 &DUMP 里没有有效的 DT_PL3D，无法导出体数据。')
+
+    n_vol = int(t_end / dt_pl3d) + 1
+    if n_vol > MAX_VOLUME_FRAMES:
+        raise ValueError(
+            f'T_END {t_end}s / DT_PL3D {dt_pl3d}s 会产出 {n_vol} 帧体数据，'
+            f'超过上限 {MAX_VOLUME_FRAMES}，请调大 DT_PL3D 或缩短 T_END。')
+
+    if not env.get('spec_id'):
+        raise ValueError('FDS 里没有 &SPEC 组分定义，无法导出浓度体数据。')
+
+    return {
+        'env': env,
+        'xb': list(xb),
+        'ijk': [int(nx), int(ny), int(nz)],
+        't_end': t_end,
+        'dt_pl3d': dt_pl3d,
+        'n_frames': n_vol,
+        'cells': int(nx) * int(ny) * int(nz),
+        'warnings': warnings,
+    }
+
+
+def simulate_fds_text(fds_text: str, config: dict = None,
+                      sensors: list = None) -> str:
+    """直接跑甲方写好的完整 FDS 输入文件，返回 session。
+
+    跟老的 render 流程不同：这里不再往模板里填占位符、也不按传感器
+    生成几何，FDS 文本原样落盘执行。MESH / T_END / DT_PL3D / SPEC
+    从文本里解析出来做校验，并把真实值写进 config.json，
+    后续 p3d2volume / 前端读到的域范围和实际计算一致。
+    """
+    summary = validate_fds_text(fds_text)
+    text = str(fds_text or '').strip()
+    env = summary['env']
+
+    session = mk_fds3d_session()
+    cfg = merge_config(config)
+    # config 记录解析出的真实值，p3d2volume / 前端都以它为准
+    cfg.update({
+        'spec_id': str(cfg.get('spec_id') or env.get('spec_id')),
+        'title': env.get('title') or cfg.get('title') or '',
+        't_end': summary['t_end'],
+        'dt_pl3d': summary['dt_pl3d'],
+        'xb': summary['xb'],
+        'ijk': summary['ijk'],
+        'n_volume_frames': summary['n_frames'],
+        'cells': summary['cells'],
+    })
+
+    dst = SIMULATION_DIR / session
+    dst.mkdir(parents=True, exist_ok=True)
+
+    (dst / FDS_INPUT_NAME).write_text(text, encoding='utf-8')
+    (dst / SENSORS_NAME).write_text(
+        json.dumps(sensors or [], ensure_ascii=False, indent=2),
+        encoding='utf-8')
+    (dst / CONFIG_NAME).write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    _spawn_run3d(dst)
     return session
 
 
@@ -578,6 +448,83 @@ def get_fds3d_simulation_result(session: str) -> dict:
             result['sensors'] = []
 
     return result
+
+
+def _namelist_spans(text: str, name_upper: str) -> list:
+    """返回 text 里所有 `&<name_upper> ... /` 的 (start, end) 字符区间。
+
+    引号里的 '/' 不算结束，跟 FDS 自己读输入卡的规则一致。
+    """
+    spans = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != '&':
+            i += 1
+            continue
+        j = i + 1
+        k = j
+        while k < n and (text[k].isalnum() or text[k] in '_-'):
+            k += 1
+        name = text[j:k].upper()
+        m = k
+        in_quote = False
+        while m < n:
+            c = text[m]
+            if c == "'":
+                in_quote = not in_quote
+            elif c == '/' and not in_quote:
+                break
+            m += 1
+        if name == name_upper:
+            spans.append((i, m + 1))
+        i = m + 1
+    return spans
+
+
+def parse_obst_list(fds_text: str) -> list:
+    """从 FDS 文本解析 OBST 列表，给页面表格联动用。"""
+    env = parse_fds_environment(fds_text or '')
+    out = []
+    for i, o in enumerate(env.get('obst') or []):
+        out.append({
+            'id': o.get('id') or f'OBST {i + 1}',
+            'xb': o['xb'],
+            'surf_id': o.get('surf_id') or 'INERT',
+        })
+    return out
+
+
+def replace_obst_namelists(fds_text: str, obsts: list) -> str:
+    """把文本里全部 &OBST 块替换成表格生成的版本（表格 -> 文本联动）。
+
+    新块统一插在 &TAIL 之前（没有 TAIL 就追加到末尾），一行一个 OBST，
+    保证 FDS 结构合法。表格为空时等于把 OBST 全部清掉。
+    """
+    text = str(fds_text or '')
+    lines = []
+    for i, o in enumerate(obsts or []):
+        xb = o.get('xb') or []
+        if len(xb) != 6:
+            continue
+        oid = str(o.get('id') or f'OBST {i + 1}').replace("'", '')
+        surf = str(o.get('surf_id') or 'INERT').replace("'", '')
+        vals = ','.join(f'{float(v):g}' for v in xb)
+        lines.append(f"&OBST ID='{oid}', XB={vals}, SURF_ID='{surf}'/")
+
+    out = text
+    for s, e in reversed(_namelist_spans(text, 'OBST')):
+        out = out[:s] + out[e:]
+    out = re.sub(r'\n{3,}', '\n\n', out).rstrip() + '\n'
+
+    if lines:
+        block = ('! ========= OBST（由页面 OBST 表格生成）=========\n'
+                 + '\n'.join(lines) + '\n')
+        tail = out.find('&TAIL')
+        if tail >= 0:
+            out = out[:tail] + block + '\n' + out[tail:]
+        else:
+            out = out.rstrip() + '\n\n' + block
+    return out
 
 
 # %% ---- 2026-09-15 ------------------------

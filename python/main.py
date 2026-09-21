@@ -43,13 +43,18 @@ from fds.simulate import (
     guess_spec_id,
 )
 from fds3d.simulate import (
-    simulate_with_fds3d,
+    simulate_fds_text,
+    validate_fds_text,
+    parse_obst_list,
+    replace_obst_namelists,
+    get_fds3d_default_template,
     get_fds3d_simulation_result,
     get_fds3d_simulation_template,
     list_fds3d_simulations,
     simulation_dir as fds3d_simulation_dir,
     volume_path as fds3d_volume_path,
 )
+from fds.parse_fds import parse_fds_environment
 from hysplit.simulate import (
     simulate_with_hysplit,
     get_hysplit_simulation_result,
@@ -2463,123 +2468,85 @@ async def simulation_page_fds():
 async def simulation_page_fds3d():
     """FDS 三维（体数据）模拟页面。
 
-    跟二维 CFD 页面同一套逻辑，区别只有产物：这里落的是整个计算域的
-    体数据（PL3D -> volume/*.bin），查看页用 three.js 做体渲染。
+    甲方直接在编辑器里写完整 FDS 输入卡（MESH/OBST/VENT/DEVC 都自己写），
+    OBST 表格与文本双向联动；不再从传感器生成几何。
+    跑完在 room3d 里看体数据动画 + DEVC 波形。
     """
     gases = gas_db.search_gases()
 
-    devices = [
-        {'id': 'CO_NEAR_LEAK', 'x': 1.3, 'y': 4.5, 'z': 1.5},
-        {'id': 'CO_FAR', 'x': 9.0, 'y': 9.0, 'z': 1.5},
-    ]
-    obstacles = []
+    # ---- 编辑器 <-> OBST 表格 联动状态 ----
+    obst_rows = []      # [{'id','xb':[6],'surf_id','inputs':{...}}]
+    devc_info = []      # 从 FDS 解析出的检测点（只读展示）
 
-    device_rows = []
-    obstacle_rows = []
+    device_head = [('ID', 'w-40'), ('x0', 'w-16'), ('x1', 'w-16'), ('y0', 'w-16'),
+                   ('y1', 'w-16'), ('z0', 'w-16'), ('z1', 'w-16'),
+                   ('SURF_ID', 'w-28')]
 
-    device_head = [('ID', 'w-52'), ('X', 'w-24'), ('Y', 'w-24'), ('Z', 'w-24')]
-    obstacle_head = [('ID', 'w-24'), ('x0', 'w-16'), ('x1', 'w-16'), ('y0', 'w-16'),
-                     ('y1', 'w-16'), ('z0', 'w-16'), ('z1', 'w-16'), ('SURF_ID', 'w-28')]
-
-    def collect_devices():
+    def collect_obst_rows():
         out = []
-        for r in device_rows:
+        for r in obst_rows:
+            w = r.get('inputs') or {}
             try:
-                out.append({
-                    'id': (r['id'].value or '').strip() or 'DEVC',
-                    'x': float(r['x'].value or 0.0),
-                    'y': float(r['y'].value or 0.0),
-                    'z': float(r['z'].value or 0.0),
-                })
-            except (TypeError, ValueError):
-                continue
-        return out
-
-    def collect_obstacles():
-        out = []
-        for r in obstacle_rows:
-            try:
-                xb = [float(r[k].value or 0.0)
+                xb = [float(w[k].value or 0.0)
                       for k in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1')]
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, KeyError):
                 continue
             out.append({
-                'id': (r['id'].value or '').strip() or 'OBST',
+                'id': (w.get('id').value or '').strip() or 'OBST',
                 'xb': xb,
-                'surf_id': (r['surf'].value or 'CONVERTER_SURF').strip(),
+                'surf_id': (w.get('surf').value or 'INERT').strip(),
             })
         return out
 
-    def add_device():
-        devices.append({'id': f'DEVC_{len(devices) + 1}', 'x': 5.0, 'y': 5.0,
-                        'z': 1.5})
-        render_devices.refresh()
+    def sync_from_editor():
+        """编辑器文本 -> OBST 表格 / DEVC 列表 / 摘要标签。"""
+        text = fds_editor.value or ''
+        nonlocal devc_info
+        try:
+            obsts = parse_obst_list(text)
+        except Exception:
+            obsts = []
+        obst_rows.clear()
+        for o in obsts:
+            obst_rows.append({
+                'id': o['id'], 'xb': o['xb'], 'surf_id': o['surf_id'],
+                'inputs': None,  # render_obst_table 里重建
+            })
+        try:
+            env = parse_fds_environment(text)
+        except Exception:
+            env = {}
+        devc_info = [d for d in (env.get('devices') or []) if d.get('xyz')]
+        render_obst_table.refresh()
+        render_devc_table.refresh()
+        update_summary()
 
-    def remove_device(index):
-        if 0 <= index < len(devices):
-            devices.pop(index)
-            render_devices.refresh()
+    def writeback_to_editor():
+        """OBST 表格 -> 编辑器文本（替换全部 &OBST 块）。"""
+        rows = collect_obst_rows()
+        fds_editor.value = replace_obst_namelists(fds_editor.value or '', rows)
+        sync_from_editor()
+        ui.notify(f'已把 {len(rows)} 个 OBST 写回 FDS 文本', color='positive')
 
-    def add_obstacle():
-        obstacles.append({'id': f'OBST_{len(obstacles) + 1}',
-                          'x0': 4.0, 'x1': 6.0, 'y0': 4.0, 'y1': 6.0,
-                          'z0': 0.0, 'z1': 2.0,
-                          'surf_id': 'CONVERTER_SURF'})
-        render_obstacles.refresh()
+    def update_summary():
+        text = fds_editor.value or ''
+        try:
+            s = validate_fds_text(text)
+        except ValueError as e:
+            summary_label.text = f'FDS 校验未通过：{e}'
+            summary_label.classes('text-xs text-negative whitespace-pre-wrap')
+            return
+        xb = s['xb']
+        summary_label.text = (
+            f"MESH {s['ijk'][0]}×{s['ijk'][1]}×{s['ijk'][2]}  "
+            f"XB {xb[0]:g}~{xb[1]:g}, {xb[2]:g}~{xb[3]:g}, {xb[4]:g}~{xb[5]:g} (m)\n"
+            f"T_END {s['t_end']:g}s · DT_PL3D {s['dt_pl3d']:g}s · "
+            f"体数据 {s['n_frames']} 帧 · {s['cells']:,} 格 · "
+            f"OBST {len(obst_rows)} · DEVC {len(devc_info)} · 组分 {s['env'].get('spec_id')}"
+            + ('\n⚠ ' + '；'.join(s['warnings']) if s['warnings'] else ''))
+        summary_label.classes('text-xs text-gray-600 whitespace-pre-wrap')
 
-    def remove_obstacle(index):
-        if 0 <= index < len(obstacles):
-            obstacles.pop(index)
-            render_obstacles.refresh()
-
-    @ui.refreshable
-    def render_devices():
-        device_rows.clear()
-        with ui.row().classes('items-center gap-1 w-full no-wrap text-xs text-gray-500'):
-            for text, cls in device_head:
-                ui.label(text).classes(cls)
-            ui.label('').classes('w-8')
-        if not devices:
-            ui.label('还没有检测点').classes('text-xs text-gray-500')
-        for index, dev in enumerate(devices):
-            with ui.row().classes('items-center gap-1 w-full no-wrap'):
-                w = {
-                    'id': ui.input(value=dev['id']).props('dense outlined placeholder=ID').classes('w-52'),
-                    'x': ui.number(value=dev['x'], step=0.1).props('dense outlined placeholder=X').classes('w-24'),
-                    'y': ui.number(value=dev['y'], step=0.1).props('dense outlined placeholder=Y').classes('w-24'),
-                    'z': ui.number(value=dev['z'], step=0.1).props('dense outlined placeholder=Z').classes('w-24'),
-                }
-                ui.button(icon='delete',
-                          on_click=lambda index=index: remove_device(index)
-                          ).props('flat dense color=negative')
-                device_rows.append(w)
-        ui.button('添加检测点', icon='add', on_click=add_device).props('flat dense')
-
-    @ui.refreshable
-    def render_obstacles():
-        obstacle_rows.clear()
-        with ui.row().classes('items-center gap-1 w-full no-wrap text-xs text-gray-500'):
-            for text, cls in obstacle_head:
-                ui.label(text).classes(cls)
-            ui.label('').classes('w-8')
-        if not obstacles:
-            ui.label('还没有障碍物矩形').classes('text-xs text-gray-500')
-        for index, obst in enumerate(obstacles):
-            with ui.row().classes('items-center gap-1 w-full no-wrap'):
-                w = {
-                    'id': ui.input(value=obst['id']).props('dense outlined placeholder=ID').classes('w-24'),
-                    'surf': ui.input(value=obst['surf_id']).props('dense outlined placeholder=SURF').classes('w-28'),
-                }
-                for key in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
-                    w[key] = ui.number(value=obst[key], step=0.1
-                                       ).props(f'dense outlined placeholder={key}').classes('w-16')
-                ui.button(icon='delete',
-                          on_click=lambda index=index: remove_obstacle(index)
-                          ).props('flat dense color=negative')
-                obstacle_rows.append(w)
-        ui.button('添加障碍物', icon='add', on_click=add_obstacle).props('flat dense')
-
-    # ---- 控制条 ----
+    # ---- 顶部控制条 ----
     with ui.row().classes('w-[1400px] justify-center items-end gap-2'):
         simulate_button = ui.button(
             '开始三维 CFD 计算', icon='play_arrow').props('color=primary')
@@ -2590,65 +2557,48 @@ async def simulation_page_fds3d():
 
     # ---- 卡片布局 ----
     with ui.row().classes('w-full justify-center items-start gap-4'):
-        with ui.column().classes('w-[240px] gap-2'):
-            mesh_card = ui.card().classes('w-full p-4 shadow-lg')
+        with ui.column().classes('w-[560px] gap-2'):
+            editor_card = ui.card().classes('w-full p-4 shadow-lg')
+            summary_card = ui.card().classes('w-full p-3 shadow-lg')
         view_card = ui.card().classes('w-[820px] h-[820px] p-0 m-0')
-        gas_card = ui.card().classes('w-[320px] p-4 shadow-lg')
+        gas_card = ui.card().classes('w-[300px] p-4 shadow-lg')
 
     with ui.row().classes('w-full justify-center items-start gap-4 mt-2'):
-        device_card = ui.card().classes('w-[700px] p-4 shadow-lg')
-        obstacle_card = ui.card().classes('w-[700px] p-4 shadow-lg')
+        obst_card = ui.card().classes('w-[760px] p-4 shadow-lg')
+        devc_card = ui.card().classes('w-[640px] p-4 shadow-lg')
 
-    # ---- 计算域与网格 ----
-    with mesh_card:
-        ui.label('计算域与网格').classes('text-h6 mb-2')
-        with ui.grid(columns=3).classes('w-full gap-1'):
-            ijk_x = ui.number('IJK x', value=60, min=4, step=1, precision=0
-                              ).props('dense outlined')
-            ijk_y = ui.number('IJK y', value=60, min=4, step=1, precision=0
-                              ).props('dense outlined')
-            ijk_z = ui.number('IJK z', value=20, min=4, step=1, precision=0
-                              ).props('dense outlined')
+    # ---- FDS 编辑器 ----
+    with editor_card:
+        ui.label('FDS 输入卡（直接编写完整 FDS）').classes('text-h6 mb-2')
+        fds_editor = ui.textarea(
+            value=get_fds3d_default_template(),
+            on_change=lambda e: update_summary(),
+        ).classes('w-full').props(
+            'dense outlined rows=18 '
+            'input-style="font-family:Consolas,monospace;font-size:12px"')
+        with ui.row().classes('w-full gap-2 mt-2'):
+            ui.button('从 FDS 解析表格', icon='sync_alt',
+                      on_click=sync_from_editor).props('flat dense')
+            ui.button('把 OBST 表格写回 FDS', icon='save',
+                      on_click=writeback_to_editor).props('flat dense')
+            ui.button('重置为默认模板', icon='restart_alt',
+                      on_click=lambda: reset_editor()).props('flat dense')
+        ui.label('说明：MESH / DUMP / SPEC / DEVC 直接在文本里改；'
+                 '障碍物可以改文本，也可以改下面表格后点「写回」，两边随时互相同步。'
+                 ).classes('text-xs text-gray-500 mt-1')
 
-        ui.label('计算域 XB（x0, x1, y0, y1, z0, z1）').classes(
-            'text-xs text-gray-500 mt-2')
-        xb_inputs = []
-        with ui.grid(columns=3).classes('w-full gap-1'):
-            for label, value in [('x0', 0.0), ('x1', 10.0), ('y0', 0.0),
-                                 ('y1', 10.0), ('z0', 0.0), ('z1', 3.0)]:
-                xb_inputs.append(
-                    ui.number(label, value=value, step=0.5).props('dense outlined'))
-        slice_z_input = ui.number('切片高度 PBZ (m)', value=1.5, step=0.1
-                                  ).classes('w-full mt-2').props('dense outlined')
-        dt_pl3d_input = ui.number('体数据输出间隔 DT_PL3D (s)', value=2.0,
-                                  min=0.1, step=0.5
-                                  ).classes('w-full').props('dense outlined')
-        ui.label('三维网格越大越慢，体数据每帧都要落盘，'
-                 '建议 IJK 单轴不超过 100。').classes('text-xs text-gray-500 mt-1')
+    with summary_card:
+        summary_label = ui.label('').classes(
+            'text-xs text-gray-600 whitespace-pre-wrap')
 
-    # ---- 气体与组分 ----
+    # ---- 气体与阈值 ----
     with gas_card:
-        ui.label('气体与组分').classes('text-h6 mb-2')
+        ui.label('气体与阈值').classes('text-h6 mb-2')
         gas_select = ui.select(
             options=[g['气体名称'] for g in gases],
             value=gases[0]['气体名称'] if gases else None,
             label='气体（取自气体库）').classes('w-full').props('dense outlined')
         gas_info_label = ui.label('').classes('text-xs text-gray-500')
-
-        spec_input = ui.select(
-            options=SPEC_ID_OPTIONS,
-            value='CO',
-            label='FDS 组分名 SPEC_ID',
-            new_value_mode='add-unique').classes('w-full mt-2').props('dense outlined')
-
-        t_end_input = ui.number('模拟时长 T_END (s)', value=20.0, min=0.1, step=1.0
-                                ).classes('w-full').props('dense outlined')
-        dt_input = ui.number('DEVC/SLCF 输出间隔 (s)', value=0.5, min=0.1, step=0.1
-                             ).classes('w-full').props('dense outlined')
-
-        extra_spec_input = ui.textarea(
-            '附加 &SPEC 定义（可选，用于 FDS 不认识的组分）'
-        ).classes('w-full').props('dense outlined rows=2')
 
         ui.label('危险区阈值（体渲染着色，体积分数）').classes(
             'text-xs text-gray-500 mt-2')
@@ -2658,14 +2608,71 @@ async def simulation_page_fds3d():
             lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
                                    ).props('dense outlined clearable')
 
-    # ---- 检测点 / 障碍物 ----
-    with device_card:
-        ui.label('检测点 DEVC（记录取数位置）').classes('text-h6 mb-2')
-        render_devices()
+    # ---- OBST 表格 / DEVC 列表 ----
+    @ui.refreshable
+    def render_obst_table():
+        for r in obst_rows:
+            r['inputs'] = {}
+        with ui.column().classes('w-full gap-0'):
+            with ui.row().classes('items-center gap-1 w-full no-wrap text-xs text-gray-500'):
+                for text, cls in device_head:
+                    ui.label(text).classes(cls)
+                ui.label('').classes('w-8')
+            if not obst_rows:
+                ui.label('FDS 里没有 OBST，或还没点「从 FDS 解析表格」'
+                         ).classes('text-xs text-gray-500')
+            for index, r in enumerate(obst_rows):
+                w = r['inputs'] = {}
+                with ui.row().classes('items-center gap-1 w-full no-wrap'):
+                    w['id'] = ui.input(value=str(r['id'])).props(
+                        'dense outlined placeholder=ID').classes('w-40')
+                    for key, val in zip(('x0', 'x1', 'y0', 'y1', 'z0', 'z1'),
+                                        r['xb']):
+                        w[key] = ui.number(value=val, step=0.5
+                                           ).props(f'dense outlined placeholder={key}'
+                                                   ).classes('w-16')
+                    w['surf'] = ui.input(value=str(r['surf_id'])).props(
+                        'dense outlined placeholder=SURF').classes('w-28')
+                    ui.button(icon='delete',
+                              on_click=lambda index=index: (
+                                  obst_rows.pop(index),
+                                  render_obst_table.refresh())
+                              ).props('flat dense color=negative')
+            with ui.row().classes('w-full gap-2 mt-1'):
+                ui.button('添加障碍物', icon='add',
+                          on_click=lambda: (
+                              obst_rows.append({
+                                  'id': f'OBST_{len(obst_rows) + 1}',
+                                  'xb': [4.0, 6.0, 4.0, 6.0, 0.0, 2.0],
+                                  'surf_id': 'INERT', 'inputs': None}),
+                              render_obst_table.refresh())
+                          ).props('flat dense')
 
-    with obstacle_card:
-        ui.label('障碍物 OBST（矩形，会画到三维场景里）').classes('text-h6 mb-2')
-        render_obstacles()
+    @ui.refreshable
+    def render_devc_table():
+        with ui.column().classes('w-full gap-0'):
+            with ui.row().classes('items-center gap-2 w-full no-wrap text-xs text-gray-500'):
+                ui.label('ID').classes('w-40')
+                ui.label('XYZ').classes('w-52')
+                ui.label('QUANTITY').classes('w-48')
+            if not devc_info:
+                ui.label('FDS 里没有 DEVC 检测点').classes('text-xs text-gray-500')
+            for d in devc_info:
+                with ui.row().classes('items-center gap-2 w-full no-wrap text-xs'):
+                    ui.label(str(d.get('id') or '—')).classes('w-40')
+                    xyz = d['xyz']
+                    ui.label(f"({xyz[0]:g}, {xyz[1]:g}, {xyz[2]:g})").classes('w-52')
+                    ui.label(str(d.get('quantity') or '—')).classes('w-48')
+            ui.label('检测点波形在三维视图里看（HUD 里的「检测点波形」按钮）'
+                     ).classes('text-xs text-gray-400 mt-1')
+
+    with obst_card:
+        ui.label('障碍物 OBST（表格 ⇄ FDS 文本联动）').classes('text-h6 mb-2')
+        render_obst_table()
+
+    with devc_card:
+        ui.label('检测点 DEVC（在 FDS 文本里定义，这里只读展示）').classes('text-h6 mb-2')
+        render_devc_table()
 
     # ---- 三维视图 ----
     with view_card:
@@ -2681,6 +2688,10 @@ async def simulation_page_fds3d():
 ''', sanitize=False)
 
     # ---- 行为 ----
+    def reset_editor():
+        fds_editor.value = get_fds3d_default_template()
+        sync_from_editor()
+
     def update_room3d(session='???'):
         stamp = int(datetime.now().timestamp() * 1000)
         ui.run_javascript(f"""
@@ -2714,55 +2725,31 @@ async def simulation_page_fds3d():
             gas_info_label.text = ''
             return
         guess = guess_spec_id(name)
-        if guess:
-            spec_input.value = guess
         gas_info_label.text = (
             f"分子式 {info.get('分子式') or '—'} · CAS {info.get('CAS号') or '—'} · "
             f"毒性 {info.get('毒性等级') or '—'}"
-            + ('' if guess else '　（未自动匹配，请手动填写组分名）'))
+            + ('' if guess else '　（FDS 组分名以输入卡里的 &SPEC 为准）'))
 
-    def collect_config():
-        return {
+    def on_click_start():
+        text = fds_editor.value or ''
+        try:
+            # 提交前再校验一遍，报错信息直接摆给用户
+            validate_fds_text(text)
+        except ValueError as e:
+            ui.notify(str(e), color='negative')
+            return
+
+        config = {
             'gas_name': gas_select.value or '',
-            'spec_id': str(spec_input.value or '').strip(),
-            't_end': float(t_end_input.value or 0.0),
-            'dt': float(dt_input.value or 0.0),
-            'dt_pl3d': float(dt_pl3d_input.value or 0.0),
-            'slice_z': float(slice_z_input.value or 0.0),
-            'ijk': [int(ijk_x.value or 1), int(ijk_y.value or 1),
-                    int(ijk_z.value or 1)],
-            'xb': [float(w.value or 0.0) for w in xb_inputs],
-            'devices': collect_devices(),
-            'obstacles': collect_obstacles(),
-            'extra_spec': extra_spec_input.value or '',
-            'velocity_slice': False,
             'v_min': 0.0,
             'v_max': None,
             'lvl1': opt_number(lvl1_input.value),
             'lvl2': opt_number(lvl2_input.value),
         }
 
-    def on_click_start():
-        if not str(spec_input.value or '').strip():
-            ui.notify('请先填写 FDS 组分名 (SPEC_ID)', color='negative')
-            return
-
         try:
-            config = collect_config()
-        except (TypeError, ValueError) as e:
-            ui.notify(f'参数不合法：{e}', color='negative')
-            return
-
-        reader = SensorDataReader()
-        sensors = reader.get_sensor_info()
-        for s in sensors:
-            try:
-                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
-            except Exception:
-                pass
-
-        try:
-            session = simulate_with_fds3d(sensors, config)
+            # 三维不再读传感器：几何全部来自甲方写的 FDS 输入卡
+            session = simulate_fds_text(text, config)
         except ValueError as e:
             ui.notify(str(e), color='negative')
             return
@@ -2786,6 +2773,7 @@ async def simulation_page_fds3d():
 
     if gases:
         on_gas_change()
+    sync_from_editor()
     update_simulation_history()
 
     return

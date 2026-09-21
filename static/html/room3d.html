@@ -186,6 +186,44 @@
             color: #555;
             line-height: 1.6;
         }
+
+        #devcPanel {
+            display: none;
+            position: absolute;
+            right: 8px;
+            top: 8px;
+            z-index: 600;
+            width: 560px;
+            max-height: calc(100% - 16px);
+            overflow: auto;
+            background: rgba(255, 255, 255, .95);
+            border: 1px solid #cfd8dc;
+            border-radius: 6px;
+            padding: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+        }
+
+        #devcPanel .devc-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #37474f;
+        }
+
+        #devcPanel .devc-empty {
+            font-size: 12px;
+            color: #90a4ae;
+            padding: 8px 2px;
+        }
+
+        #devcPanel canvas {
+            display: block;
+            width: 100%;
+            margin-bottom: 6px;
+        }
     </style>
 </head>
 
@@ -207,6 +245,7 @@
         <div id="hudRow">
             <button id="playBtn" class="btn" title="播放 / 暂停" disabled>▶ 播放</button>
             <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
+            <button id="devcBtn" class="btn" title="显示 FDS 里 DEVC 检测点的时间序列">检测点波形</button>
             <button id="templateBtn" class="btn" title="查看本次实际使用的输入卡">查看 CONTROL</button>
         </div>
         <div id="hudRow2">
@@ -233,6 +272,14 @@
             <span id="scaleText"></span>
         </div>
         <pre id="templateBox"></pre>
+    </div>
+
+    <div id="devcPanel">
+        <div class="devc-head">
+            <span>检测点波形（DEVC）</span>
+            <button id="devcCloseBtn" class="btn">关闭</button>
+        </div>
+        <div id="devcCharts"></div>
     </div>
 
     <script type="importmap">
@@ -283,6 +330,7 @@
             uniforms: null,
             baseStep: 0.1,       // 最小网格边长，采样步长的基准
             current: -1,
+            devc: null,          // DEVC 时间序列 {names, units, times, values}
         };
 
         // ------------------------------------------------------------------
@@ -548,7 +596,7 @@
             });
         }
 
-        function drawDevices(env, sensors) {
+        function drawDevices(env) {
             const [x0, x1, y0, y1, z0, z1] = state.xb;
             const r = Math.max((x1 - x0), (y1 - y0)) * 0.012;
             const dot = (x, y, z, color) => {
@@ -558,14 +606,10 @@
                 m.position.set(x, y, Math.min(Math.max(z, z0), z1));
                 devcGroup.add(m);
             };
+            // 只画 FDS 输入卡里写的 DEVC；三维已经不再跟传感器库联动
             ((env && env.devices) || []).forEach((d) => {
                 if (!d.xyz) return;
                 dot(d.xyz[0], d.xyz[1], d.xyz[2], 0x1565c0);
-            });
-            (sensors || []).forEach((s) => {
-                const x = x0 + (s.x_position || 0) * (x1 - x0);
-                const y = y0 + (s.y_position || 0) * (y1 - y0);
-                dot(x, y, (z0 + z1) / 2, 0xd85a30);
             });
         }
 
@@ -604,7 +648,180 @@
             const f = state.frames[state.index];
             const t = (f.time === null || f.time === undefined) ? '—' : `${f.time}s`;
             $('frameLabel').textContent = `t = ${t}   (${state.index + 1}/${n})`;
+            updateDevcMarker();
         }
+
+        // ------------------------------------------------------------------
+        // DEVC 波形面板：把 *_devc.csv 的读数画成时间序列
+        // ------------------------------------------------------------------
+
+        const DEVC_COLORS = [
+            '#1565c0', '#c1121f', '#2e7d32', '#ef6c00', '#6a1b9a',
+            '#00838f', '#8d6e63', '#c62828', '#455a64', '#ad1457',
+        ];
+
+        function currentFrameTime() {
+            const f = state.frames[state.index];
+            return (f && f.time !== null && f.time !== undefined)
+                ? Number(f.time) : null;
+        }
+
+        function updateDevcMarker() {
+            if (!state.devc) return;
+            state.devc.markerTime = currentFrameTime();
+            state.devc.groups.forEach(drawDevcChart);
+        }
+
+        function setupDevc(devc) {
+            const box = $('devcCharts');
+            box.innerHTML = '';
+            const names = (devc && devc.names) || [];
+            if (!names.length) {
+                box.innerHTML = '<div class="devc-empty">这次模拟没有 DEVC 读数'
+                    + '（输入卡里写 &DEVC，跑完就有波形）</div>';
+                state.devc = null;
+                return;
+            }
+
+            // 按单位分组：体积分数和速度不是一个量纲，得分开画
+            const groups = new Map();
+            names.forEach((name, i) => {
+                const unit = (devc.units && devc.units[i]) || '';
+                if (!groups.has(unit)) groups.set(unit, []);
+                groups.get(unit).push(name);
+            });
+
+            state.devc = {
+                names,
+                units: devc.units || [],
+                times: devc.times || [],
+                values: devc.values || {},
+                groups: [...groups.entries()].map(([unit, list]) => ({
+                    unit, list,
+                })),
+                markerTime: currentFrameTime(),
+            };
+            state.devc.groups.forEach(drawDevcChart);
+        }
+
+        function drawDevcChart(group) {
+            const { unit, list } = group;
+            const times = state.devc.times;
+            const W = 520;
+            const H = 168;
+            const pad = { l: 56, r: 10, t: 24, b: 22 };
+
+            const canvas = document.createElement('canvas');
+            canvas.width = W * 2;
+            canvas.height = H * 2;
+            canvas.style.height = H + 'px';
+            canvas.dataset.unit = unit;
+            const ctx = canvas.getContext('2d');
+            ctx.scale(2, 2);
+
+            // 数值范围
+            let lo = Infinity, hi = -Infinity;
+            const series = [];
+            list.forEach((name) => {
+                const v = (state.devc.values[name] || []).map(Number);
+                series.push({ name, v });
+                v.forEach((e) => {
+                    if (isFinite(e)) {
+                        lo = Math.min(lo, e);
+                        hi = Math.max(hi, e);
+                    }
+                });
+            });
+            if (!isFinite(lo)) { lo = 0; hi = 1; }
+            if (hi - lo < 1e-12) hi = lo + 1e-12;
+            const span = hi - lo;
+            lo -= span * 0.06;
+            hi += span * 0.06;
+
+            const tMax = Math.max(...times, 1e-9);
+            const X = (t) => pad.l + (t / tMax) * (W - pad.l - pad.r);
+            const Y = (v) => pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b);
+
+            // 背景与网格
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, W, H);
+            ctx.strokeStyle = '#eceff1';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.t + i * (H - pad.t - pad.b) / 4;
+                ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+            }
+
+            // 标题：单位组
+            ctx.fillStyle = '#37474f';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.fillText(`${list.length} 条 · 单位 ${unit || '—'}`, pad.l, 13);
+
+            // y 轴刻度
+            ctx.font = '10px sans-serif';
+            ctx.fillStyle = '#78909c';
+            for (let i = 0; i <= 4; i++) {
+                const v = hi - i * (hi - lo) / 4;
+                const y = pad.t + i * (H - pad.t - pad.b) / 4;
+                ctx.fillText(fmtNum(v), 4, y + 3);
+            }
+            // x 轴刻度
+            for (let i = 0; i <= 4; i++) {
+                const t = tMax * i / 4;
+                ctx.fillText(t.toFixed(0) + 's', X(t) - 8, H - 6);
+            }
+
+            // 曲线
+            series.forEach((s, i) => {
+                ctx.strokeStyle = DEVC_COLORS[i % DEVC_COLORS.length];
+                ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                s.v.forEach((v, k) => {
+                    const t = times[k];
+                    if (t === undefined || !isFinite(v)) return;
+                    const x = X(t), y = Y(v);
+                    k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                });
+                ctx.stroke();
+            });
+
+            // 当前帧时间竖线
+            const mt = state.devc.markerTime;
+            if (mt !== null && isFinite(mt) && mt >= 0 && mt <= tMax) {
+                ctx.strokeStyle = '#ff8f00';
+                ctx.lineWidth = 1.2;
+                ctx.setLineDash([4, 3]);
+                ctx.beginPath();
+                ctx.moveTo(X(mt), pad.t);
+                ctx.lineTo(X(mt), H - pad.b);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 图例
+            ctx.font = '10px sans-serif';
+            let lx = pad.l;
+            series.forEach((s, i) => {
+                ctx.fillStyle = DEVC_COLORS[i % DEVC_COLORS.length];
+                ctx.fillRect(lx, H - 13, 8, 3);
+                ctx.fillStyle = '#546e7a';
+                ctx.fillText(s.name, lx + 11, H - 9);
+                lx += 11 + ctx.measureText(s.name).width + 12;
+            });
+
+            const box = $('devcCharts');
+            const old = box.querySelector(`canvas[data-unit="${CSS.escape(unit)}"]`);
+            if (old) old.replaceWith(canvas);
+            else box.appendChild(canvas);
+        }
+
+        $('devcBtn').addEventListener('click', () => {
+            const p = $('devcPanel');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+        });
+        $('devcCloseBtn').addEventListener('click', () => {
+            $('devcPanel').style.display = 'none';
+        });
 
         async function refresh() {
             let resp;
@@ -649,12 +866,13 @@
             if (!state.mesh) {
                 buildScene();
                 drawObstacles(resp.environment);
-                drawDevices(resp.environment, resp.sensors);
+                drawDevices(resp.environment);
                 applyToggles();
                 await showFrame(0);
             } else {
                 await showFrame(state.index);
             }
+            setupDevc(resp.devc);
         }
 
         async function frameBytes(frame) {
