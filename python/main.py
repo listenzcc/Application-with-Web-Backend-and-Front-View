@@ -1769,10 +1769,12 @@ async def exception_handler_404(request: Request, exception: Exception):
     <head>
         <title>404 - Page Not Found</title>
         <style>
-            body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
-            h1 {{ color: #dc2626; }}
+            body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px;
+                    background: #0a1a33; color: #dbe4f4; }}
+            h1 {{ color: #ff8a8a; }}
             .message {{ margin: 20px 0; }}
-            button {{ background: #3b82f6; color: white; border: none; padding: 10px 20px; cursor: pointer; }}
+            button {{ background: #16305a; color: #dbe4f4; border: 1px solid #3a5a8f;
+                      padding: 10px 20px; cursor: pointer; border-radius: 4px; }}
         </style>
     </head>
     <body>
