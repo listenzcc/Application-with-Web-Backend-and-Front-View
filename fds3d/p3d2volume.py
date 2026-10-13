@@ -14,8 +14,20 @@ Purpose:
     再展平，正好是 WebGL 三维纹理要求的顺序（width=nx, height=ny, depth=nz）。
     坐标是节点值（IJK + 1 个点），所以体块正好铺满整个计算域 XB。
 
-    归一化：所有帧共用一套全局量程（frames.json 的 v_min / v_max），
-    这样帧与帧之间颜色可比；每帧自己的极值另外记下来，前端拿它算不透明度。
+    归一化：默认按「绝对色标」压到 uint8 —— 字节 0~255 对应
+    0 ~ DEFAULT_DISPLAY_MAX_PPM（ppm），跟这场数据自己的峰值无关。
+    体积分数的动态范围能跨 5 个数量级（泄漏口几十万 ppm、远场 1 ppm），
+    要是按峰值归一，420 / 1700 ppm 这两个危险阈值会全挤在 byte 0~2 里，
+    色阶分辨率白扔。固定成危险区所在的那个量级，阈值判定和色阶才有意义。
+
+    frames.json 里 v_min / v_max 仍是数据的真实范围（历史下拉展示用），
+    scale_min / scale_max 是字节的解码范围（前端按它还原物理量），
+    超出 scale_max 的截到 255 并置 clamped。
+    体积分数另外给出 display_units='ppm' 与 unit_scale=1e6：前端拿
+    scale_* × unit_scale 就是 ppm，不必自己猜量纲。
+
+    不带绝对色标时（非 mol/mol 量纲，或者 config 里关掉）退回老行为：
+    所有帧共用一套全局量程，帧间颜色可比；每帧极值另外记下来。
 
 Functions:
     1. Requirements and constants
@@ -44,6 +56,12 @@ CONFIG_NAME = 'config.json'
 MAX_VOXELS = 4_000_000
 
 QUANTITY = 'VOLUME FRACTION'
+
+#: 体积分数（mol/mol）换算成 ppm 的系数，前端也按 ppm 显示
+PPM_SCALE = 1e6
+
+#: 默认绝对色标上限（ppm）。见文件头「归一化」一段。
+DEFAULT_DISPLAY_MAX_PPM = 2000.0
 
 
 # %%
@@ -92,8 +110,8 @@ def value_column(path: Path) -> tuple:
     return len(units) - 1, (units[-1] if units else '')
 
 
-def read_frame(path: Path, value_col: int) -> np.ndarray:
-    """读一帧文本，返回展平的一维数组（x 最快）。"""
+def read_frame(path: Path, value_col: int) -> pd.DataFrame:
+    """读一帧文本，返回 DataFrame（列 x / y / z / v），行序 x 最快。"""
     df = pd.read_csv(path, skiprows=2, header=None,
                      usecols=[0, 1, 2, value_col],
                      names=['x', 'y', 'z', 'v'], dtype=np.float32)
@@ -128,6 +146,49 @@ def downsample_axis(n: int, stride: int) -> np.ndarray:
     return np.unique(np.linspace(0, n - 1, m).round().astype(int))
 
 
+def unit_scale(units: str) -> float:
+    """物理量 -> 显示单位的换算系数。体积分数显示成 ppm，其它原样。"""
+    return PPM_SCALE if units == 'mol/mol' else 1.0
+
+
+def fixed_range(cfg: dict, units: str, scale_factor: float):
+    """归一化范围 (g_min, g_max)；返回 None 表示按数据峰值归一化。
+
+    优先级：
+      1. config 同时写了 v_min 和 v_max —— 直接用它，复核单场数据用；
+      2. config.display_max_ppm —— 绝对色标上限（ppm），<=0 表示关掉；
+      3. 体积分数的默认绝对色标 0 ~ DEFAULT_DISPLAY_MAX_PPM。
+    """
+    if cfg.get('v_min') is not None and cfg.get('v_max') is not None:
+        return float(cfg['v_min']), float(cfg['v_max'])
+
+    raw = cfg.get('display_max_ppm')
+    if raw is None:
+        if units != 'mol/mol':
+            return None
+        raw = DEFAULT_DISPLAY_MAX_PPM
+    try:
+        dmax = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(dmax) or dmax <= 0:
+        return None
+    return 0.0, dmax / scale_factor
+
+
+def frame_values(path: Path, value_col: int) -> np.ndarray:
+    """一帧的浓度列，展平成一维 float32（x 最快），长度保持原始行数。"""
+    return read_frame(path, value_col)['v'].to_numpy(dtype=np.float32)
+
+
+def value_span(v: np.ndarray) -> tuple:
+    """去掉非有限值之后的 (min, max)。"""
+    f = v[np.isfinite(v)]
+    if not f.size:
+        return 0.0, 0.0
+    return float(f.min()), float(f.max())
+
+
 # %%
 if __name__ == '__main__':
     cfg = read_config()
@@ -138,7 +199,9 @@ if __name__ == '__main__':
 
     first = P3D_DIR / items[0]['file']
     value_col, units = value_column(first)
-    print(f'value column: {value_col}  units: {units}')
+    scale_factor = unit_scale(units)
+    display_units = 'ppm' if scale_factor != 1.0 else (units or '')
+    print(f'value column: {value_col}  units: {units}  display: {display_units}')
 
     df0 = read_frame(first, value_col)
     nx, ny, nz = frame_shape(df0)
@@ -157,28 +220,32 @@ if __name__ == '__main__':
     iz = downsample_axis(nz, stride)
     out_nx, out_ny, out_nz = len(ix), len(iy), len(iz)
 
-    # 第一遍：逐帧极值 + 全局量程
-    per_frame_range = []
-    g_min, g_max = np.inf, -np.inf
-    for it in items:
-        df = read_frame(P3D_DIR / it['file'], value_col)
-        v = df['v'].to_numpy(dtype=np.float32)
-        v = v[np.isfinite(v)]
-        lo = float(v.min()) if v.size else 0.0
-        hi = float(v.max()) if v.size else 0.0
-        per_frame_range.append((lo, hi))
-        g_min = min(g_min, lo)
-        g_max = max(g_max, hi)
-    if not np.isfinite(g_min) or not np.isfinite(g_max) or g_max <= g_min:
-        g_max = g_min + 1e-9
+    # 字节的解码范围：绝对色标优先。拿不到（非 mol/mol 或 config 关掉）才
+    # 退回「整场峰值归一」，那样阈值会挤在最低几个字节里
+    fixed = fixed_range(cfg, units, scale_factor)
+    g_min, g_max = fixed if fixed is not None else (np.inf, -np.inf)
 
-    # config.json 里写死的量程优先（跟二维那套一致）
-    if cfg.get('v_min') is not None:
-        g_min = float(cfg['v_min'])
-    if cfg.get('v_max') is not None:
-        g_max = float(cfg['v_max'])
+    # 第一遍：逐帧真实极值（历史下拉与「已封顶」提示用）；需要峰值归一化时
+    # 顺带把整场峰值算出来
+    per_frame_range = []
+    for it in items:
+        lo, hi = value_span(frame_values(P3D_DIR / it['file'], value_col))
+        per_frame_range.append((lo, hi))
+        if fixed is None:
+            g_min = min(g_min, lo)
+            g_max = max(g_max, hi)
+    if fixed is None and (not np.isfinite(g_min) or not np.isfinite(g_max)
+                          or g_max <= g_min):
+        g_min, g_max = 0.0, 1.0
+
     span = max(g_max - g_min, 1e-12)
-    print(f'global range: {g_min:g} ~ {g_max:g}')
+    data_min = min((r[0] for r in per_frame_range), default=0.0)
+    data_max = max((r[1] for r in per_frame_range), default=0.0)
+    print(f'byte scale: {g_min * scale_factor:g} ~ {g_max * scale_factor:g} '
+          f'{display_units}  '
+          f'{"(absolute)" if fixed is not None else "(per-run peak)"}')
+    print(f'data range: {data_min * scale_factor:g} ~ {data_max * scale_factor:g} '
+          f'{display_units}')
 
     if VOLUME_DIR.exists():
         shutil.rmtree(VOLUME_DIR)
@@ -186,9 +253,9 @@ if __name__ == '__main__':
 
     # 第二遍：写成 uint8 体数据
     frames = []
+    n_clamped_total = 0
     for i, it in enumerate(items):
-        df = read_frame(P3D_DIR / it['file'], value_col)
-        v = df['v'].to_numpy(dtype=np.float32)
+        v = frame_values(P3D_DIR / it['file'], value_col)
         if v.size != nx * ny * nz:
             raise SystemExit(
                 f"{it['file']}: 数据行数 {v.size} 与网格 {nx}×{ny}×{nz} 不符。")
@@ -196,6 +263,8 @@ if __name__ == '__main__':
         vol = np.nan_to_num(vol, nan=g_min)
         if stride > 1:
             vol = vol[np.ix_(iz, iy, ix)]
+        n_clamped = int(np.count_nonzero(vol > g_max))
+        n_clamped_total += n_clamped
         data = np.clip((vol - g_min) / span * 255.0, 0, 255).astype(np.uint8)
 
         name = f'frame_{i:03d}.bin'
@@ -206,19 +275,31 @@ if __name__ == '__main__':
             'index': i,
             'file': name,
             'time': it.get('time'),
-            'v_min': round(lo, 8),
-            'v_max': round(hi, 8),
+            'v_min': round(lo, 10),
+            'v_max': round(hi, 10),
+            'n_clamped': n_clamped,
         })
-        print(f"  {name}  t={it.get('time')}  range {lo:.4g} ~ {hi:.4g}"
+        print(f"  {name}  t={it.get('time')}  "
+              f"data {lo * scale_factor:.4g} ~ {hi * scale_factor:.4g} "
+              f"{display_units}  封顶 {n_clamped} 体素"
               f"  {(VOLUME_DIR / name).stat().st_size / 1e6:.2f} MB")
 
     meta = {
         'quantity': QUANTITY,
         'units': units,
+        # 显示单位：体积分数按 ppm 给人看（前端不再自己换算）
+        'display_units': display_units,
+        'unit_scale': scale_factor,
         'frames': frames,
         'n_frames': len(frames),
-        'v_min': g_min,
-        'v_max': g_max,
+        # 数据自身的真实范围（历史下拉展示）
+        'v_min': data_min,
+        'v_max': data_max,
+        # uint8 的解码范围，前端按它把字节还原成物理量
+        'scale_min': g_min,
+        'scale_max': g_max,
+        'clamped': n_clamped_total > 0,
+        'n_clamped': n_clamped_total,
         'ijk': [out_nx, out_ny, out_nz],
         'ijk_full': [nx, ny, nz],
         'xb': xb or cfg.get('xb'),

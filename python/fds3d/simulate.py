@@ -28,6 +28,7 @@ Functions:
 import re
 import sys
 import json
+import math
 import uuid
 import subprocess
 
@@ -315,10 +316,50 @@ def _read_frames_meta(d: Path) -> dict:
         return {}
 
 
+def display_meta(meta: dict) -> dict:
+    """把 frames.json 的量纲信息摊成「显示单位」下的一组数。
+
+    体积分数（mol/mol）统一按 ppm 显示：unit_scale 是换算系数，
+    scale_* 是 uint8 的解码范围，v_min / v_max 是数据自身的真实范围，
+    乘上 unit_scale 之后都是显示单位的数。
+    """
+    units = meta.get('units') or ''
+    raw_k = meta.get('unit_scale')
+    if raw_k is None:
+        # 老会话的 frames.json 没写 unit_scale：体积分数一律按 ppm 显示
+        raw_k = 1e6 if units == 'mol/mol' else 1.0
+    try:
+        k = float(raw_k)
+    except (TypeError, ValueError):
+        k = 1.0
+    if not math.isfinite(k) or k <= 0:
+        k = 1.0
+
+    def scaled(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f * k if math.isfinite(f) else None
+
+    return {
+        'units': units,
+        'display_units': (meta.get('display_units')
+                          or ('ppm' if units == 'mol/mol' else units)),
+        'unit_scale': k,
+        'scale': [scaled(meta.get('scale_min')), scaled(meta.get('scale_max'))],
+        'data_range': [scaled(meta.get('v_min')), scaled(meta.get('v_max'))],
+        'clamped': bool(meta.get('clamped')),
+    }
+
+
 def list_fds3d_simulations() -> list:
     """按时间倒序列出全部三维模拟目录及其状态。
 
     v_min / v_max 也带出来：选历史结果时先让用户看到这场算出来的量程。
+    体积分数按 ppm 给（v_units='ppm'），跟页面里的显示单位保持一致。
     """
     if not SIMULATION_DIR.is_dir():
         return []
@@ -335,12 +376,15 @@ def list_fds3d_simulations() -> list:
             if vol.is_dir():
                 n_frames = sum(1 for f in vol.iterdir()
                                if f.suffix.lower() == '.bin')
+        disp = display_meta(meta)
+        lo, hi = disp['data_range']
         out.append({
             'session': d.name,
             'status': status,
             'n_frames': n_frames,
-            'v_min': meta.get('v_min'),
-            'v_max': meta.get('v_max'),
+            'v_min': lo,
+            'v_max': hi,
+            'v_units': disp['display_units'] if disp['unit_scale'] != 1.0 else '',
             'created': d.stat().st_mtime,
             'note': _read_marker(d / (FAILED_MARKER if status == 'failed'
                                       else SUCCESS_MARKER)),
@@ -427,6 +471,17 @@ def get_fds3d_simulation_result(session: str) -> dict:
     result['n_frames'] = len(frames)
     result['v_min'] = meta.get('v_min')
     result['v_max'] = meta.get('v_max')
+
+    # 显示单位下的量：体积分数一律换算成 ppm 交前端，scale 是字节的解码范围，
+    # data_range 是数据真实范围（用来说明「峰值已封顶」）
+    disp = display_meta(meta)
+    result['units'] = disp['units']
+    result['display_units'] = disp['display_units']
+    result['unit_scale'] = disp['unit_scale']
+    result['scale'] = disp['scale']
+    result['data_range'] = disp['data_range']
+    result['clamped'] = disp['clamped']
+
     result['volume'] = {
         'ijk': meta.get('ijk'),
         'xb': meta.get('xb') or cfg.get('xb'),

@@ -64,6 +64,20 @@ def fds_bin_dir() -> str:
     return ''
 
 
+def fds2ascii_exe() -> str:
+    """fds2ascii 的绝对路径；找不到就退回裸名，靠 PATH 解析。
+
+    这里必须给完整路径且不能用 shell=True：走 shell 会拉起 cmd.exe，
+    在受限环境里直接被拦掉。
+    """
+    bin_dir = fds_bin_dir()
+    if bin_dir:
+        exe = Path(bin_dir) / 'fds2ascii.exe'
+        if exe.is_file():
+            return str(exe)
+    return 'fds2ascii.exe'
+
+
 def q_sort_key(path: Path):
     """`<CHID>_1_24p10.q` -> (网格号, 时间)。时间在文件名里写成 24p10。
 
@@ -100,12 +114,11 @@ def run_fds2ascii(chid: str, q_files: list) -> str:
         env['PATH'] = bin_dir + os.pathsep + env.get('PATH', '')
 
     proc = subprocess.run(
-        'fds2ascii',
+        [fds2ascii_exe()],
         input='\n'.join(lines) + '\n',
         text=True,
         capture_output=True,
         env=env,
-        shell=True,
     )
     log = (proc.stdout or '') + (proc.stderr or '')
     Path(LOG_NAME).write_text(log, encoding='utf-8', errors='replace')

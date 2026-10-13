@@ -251,9 +251,9 @@
         <div id="hudRow2">
             <label class="chk"><input id="dangerChk" type="checkbox" checked> 危险区着色</label>
             <span class="swatch" style="background:#f08c00"></span>
-            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"><span class="unit"></span></label>
             <span class="swatch" style="background:#c1121f"></span>
-            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"><span class="unit"></span></label>
             <span id="contourNote">—</span>
         </div>
         <div id="hudRow2">
@@ -265,7 +265,7 @@
             <label class="chk"><input id="darkChk" type="checkbox"> 深色背景</label>
         </div>
         <div id="legendLine">
-            浓度
+            <span id="legendUnit">浓度</span>
             <span class="swatch" style="background:#FDE725"></span>高
             <span class="swatch" style="background:#22A884"></span>
             <span class="swatch" style="background:#440154"></span>低
@@ -304,6 +304,18 @@
         const LIGHT_BG = 0xeef2f6;
         const DARK_BG = 0x0b0f14;
 
+        // FDS 的 CO 体积分数在 PL3D / DEVC 里都是 mol/mol（量级 1e-6），
+        // 显示时统一按 ppm（×1e6）才是「真实值」。
+        //
+        // 色标不再由前端猜：体数据的字节是按 frames.json 里的绝对色标压的
+        // （默认 0 ~ 2000 ppm），接口会把换算好的 scale 一起给过来，字节解码
+        // 出来直接就是 ppm。只有老会话缺这些字段时才退回下面的兜底值。
+        const PPM_SCALE = 1e6;
+        const FALLBACK_SCALE_MAX = 2000;
+        // 危险区默认阈值（ppm）：0 ~ 2000 的色标里，致伤 420 / 致死 1700
+        const DEFAULT_LVL1 = 420;
+        const DEFAULT_LVL2 = 1700;
+
         // 与二维页面共用的色标（viridis 五段）与危险区配色
         const VIRIDIS = [
             [0x44, 0x01, 0x54], [0x41, 0x44, 0x87], [0x2A, 0x78, 0x8E],
@@ -316,8 +328,11 @@
             playing: false,
             timer: null,
             status: 'missing',
-            vMin: 0,
-            vMax: 1,
+            vMin: 0,             // 色标下限（显示单位）
+            vMax: 1,             // 色标上限（显示单位）
+            displayUnits: '',    // 显示单位（体积分数是 ppm）
+            dataMax: null,       // 数据真实峰值（显示单位），用来说明「已封顶」
+            clamped: false,      // 是否有体素超出色标上限被截断
             grid: null,          // [nx, ny, nz]
             xb: null,            // [x0,x1,y0,y1,z0,z1]
             lvl1: null,
@@ -397,12 +412,10 @@
             uniform sampler3D uVolume;
             uniform vec3 uBoxSize;
             uniform vec3 uCameraPos;   // 相机在盒子局部坐标（0 ~ size）里的位置
-            uniform float uGlobalMin;
-            uniform float uGlobalMax;
-            uniform float uFrameMin;
-            uniform float uFrameMax;
-            uniform float uLvl1;
-            uniform float uLvl2;
+            uniform float uGlobalMin;  // 色标下限（ppm）
+            uniform float uGlobalMax;  // 色标上限（ppm）
+            uniform float uLvl1;       // 致伤阈值（ppm）
+            uniform float uLvl2;       // 致死阈值（ppm）
             uniform float uUseDanger;
             uniform float uOpacity;
             uniform float uStep;
@@ -458,14 +471,13 @@
                 for (int i = 0; i < 4096; i++) {
                     if (i >= steps) break;
                     vec3 p = ro + rd * (start + float(i) * step);
-                    float g = texture(uVolume, p / uBoxSize).r;   // 全局归一化 0~1
+                    float g = texture(uVolume, p / uBoxSize).r;   // 色标归一化 0~1
                     if (g > 0.0015) {
                         float val = mix(uGlobalMin, uGlobalMax, g);
-                        float u = clamp((val - uFrameMin) /
-                                        max(uFrameMax - uFrameMin, 1e-12), 0.0, 1.0);
-                        // 体积分数的动态范围全压在泄漏点附近，低次幂才能把
-                        // 烟羽主体提亮；高次幂只剩核心一点，整朵云看不见
-                        float a = pow(u, 0.4) * uOpacity * 0.12;
+                        // 字节本来就是按色标线性压出来的，所以 g 就是「占色标
+                        // 上限的比例」，直接当浓度权重用：跟色标一致，也不会
+                        // 帧间抖。低次幂才能把烟羽主体提亮，高次幂只剩核心
+                        float a = pow(g, 0.4) * uOpacity * 0.12;
                         vec3 col = viridis(g);
                         if (uUseDanger > 0.5) {
                             if (val >= uLvl2) {
@@ -502,8 +514,6 @@
                     uCameraPos: { value: new THREE.Vector3() },
                     uGlobalMin: { value: 0 },
                     uGlobalMax: { value: 1 },
-                    uFrameMin: { value: 0 },
-                    uFrameMax: { value: 1 },
                     uLvl1: { value: 1e9 },
                     uLvl2: { value: 1e9 },
                     uUseDanger: { value: 1 },
@@ -642,6 +652,76 @@
             return String(Number(n.toPrecision(3)));
         }
 
+        /** ppm 这种整数级别的量，千分位更好读（420 / 1,700 / 254,240）。 */
+        function fmtPpm(v) {
+            const n = Number(v);
+            if (!isFinite(n)) return '—';
+            if (Math.abs(n) >= 1000) {
+                return Math.round(n).toFixed(0)
+                    .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            }
+            if (n === 0) return '0';
+            return String(Number(n.toPrecision(3)));
+        }
+
+        /** 按当前显示单位挑格式。 */
+        function fmtVal(v) {
+            return state.displayUnits === 'ppm' ? fmtPpm(v) : fmtNum(v);
+        }
+
+        /**
+         * 从接口结果里取出色标与显示单位。
+         *
+         * 新会话由 frames.json 给出 scale（绝对色标，字节就是按它压的）；
+         * 老会话没有这个字段，就退回「v_min ~ v_max 即字节解码范围」，
+         * 体积分数再乘 1e6 换成 ppm。
+         */
+        function readScale(resp) {
+            const units = resp.units || (resp.volume || {}).units || '';
+            const k = Number(resp.unit_scale)
+                || (units === 'mol/mol' ? PPM_SCALE : 1);
+            const sc = Array.isArray(resp.scale) ? resp.scale : null;
+            let lo;
+            let hi;
+            if (sc && sc[0] !== null && sc[0] !== undefined
+                && sc[1] !== null && sc[1] !== undefined) {
+                lo = Number(sc[0]);
+                hi = Number(sc[1]);
+            } else {
+                lo = (resp.v_min === null || resp.v_min === undefined)
+                    ? 0 : Number(resp.v_min) * k;
+                hi = (resp.v_max === null || resp.v_max === undefined)
+                    ? FALLBACK_SCALE_MAX : Number(resp.v_max) * k;
+            }
+            if (!isFinite(lo)) lo = 0;
+            if (!isFinite(hi) || hi <= lo) hi = lo + FALLBACK_SCALE_MAX;
+            state.vMin = lo;
+            state.vMax = hi;
+            state.displayUnits = resp.display_units
+                || (k === PPM_SCALE ? 'ppm' : units);
+
+            const dr = Array.isArray(resp.data_range) ? resp.data_range : null;
+            state.dataMax = (dr && dr[1] !== null && dr[1] !== undefined)
+                ? Number(dr[1]) : null;
+            state.clamped = !!resp.clamped;
+        }
+
+        function updateScaleText() {
+            const u = state.displayUnits ? ' ' + state.displayUnits : '';
+            let text = `　色标 ${fmtVal(state.vMin)} ~ ${fmtVal(state.vMax)}${u}`;
+            if (state.clamped && state.dataMax !== null
+                && state.dataMax > state.vMax) {
+                text += `　（峰值 ${fmtVal(state.dataMax)}${u}，`
+                    + '超出色标的部分按上限着色）';
+            }
+            $('scaleText').textContent = text;
+            $('legendUnit').textContent =
+                `浓度${state.displayUnits ? '（' + state.displayUnits + '）' : ''}`;
+            document.querySelectorAll('#hud span.unit').forEach((el) => {
+                el.textContent = state.displayUnits ? ' ' + state.displayUnits : '';
+            });
+        }
+
         function setFrameLabel() {
             const n = state.frames.length;
             if (!n) { $('frameLabel').textContent = '— / —'; return; }
@@ -707,6 +787,9 @@
         function drawDevcChart(group) {
             const { unit, list } = group;
             const times = state.devc.times;
+            // 体积分数按 ppm 画，跟 HUD 和色标保持同一个单位
+            const uScale = (unit === 'mol/mol') ? PPM_SCALE : 1;
+            const uLabel = (unit === 'mol/mol') ? 'ppm' : (unit || '—');
             const W = 520;
             const H = 168;
             const pad = { l: 56, r: 10, t: 24, b: 22 };
@@ -723,7 +806,8 @@
             let lo = Infinity, hi = -Infinity;
             const series = [];
             list.forEach((name) => {
-                const v = (state.devc.values[name] || []).map(Number);
+                const v = (state.devc.values[name] || []).map(
+                    (e) => Number(e) * uScale);
                 series.push({ name, v });
                 v.forEach((e) => {
                     if (isFinite(e)) {
@@ -755,7 +839,7 @@
             // 标题：单位组
             ctx.fillStyle = '#37474f';
             ctx.font = 'bold 11px sans-serif';
-            ctx.fillText(`${list.length} 条 · 单位 ${unit || '—'}`, pad.l, 13);
+            ctx.fillText(`${list.length} 条 · 单位 ${uLabel}`, pad.l, 13);
 
             // y 轴刻度
             ctx.font = '10px sans-serif';
@@ -763,7 +847,7 @@
             for (let i = 0; i <= 4; i++) {
                 const v = hi - i * (hi - lo) / 4;
                 const y = pad.t + i * (H - pad.t - pad.b) / 4;
-                ctx.fillText(fmtNum(v), 4, y + 3);
+                ctx.fillText(uScale !== 1 ? fmtPpm(v) : fmtNum(v), 4, y + 3);
             }
             // x 轴刻度
             for (let i = 0; i <= 4; i++) {
@@ -835,10 +919,8 @@
             }
 
             setStatus(resp.status, resp.note);
-            state.vMin = (resp.v_min === null || resp.v_min === undefined) ? 0 : Number(resp.v_min);
-            state.vMax = (resp.v_max === null || resp.v_max === undefined) ? 1 : Number(resp.v_max);
-            $('scaleText').textContent =
-                `　量程 ${fmtNum(state.vMin)} ~ ${fmtNum(state.vMax)}（${resp.quantity || '体积分数'}，mol/mol）`;
+            readScale(resp);
+            updateScaleText();
             initLevels(resp);
 
             if (resp.status === 'pending') {
@@ -906,12 +988,9 @@
             state.bytes = bytes;
 
             const u = state.uniforms;
+            // 色标是整场固定的绝对范围，不随帧变；浓度权重直接用字节本身
             u.uGlobalMin.value = state.vMin;
             u.uGlobalMax.value = state.vMax;
-            u.uFrameMin.value = (frame.v_min === null || frame.v_min === undefined)
-                ? state.vMin : Number(frame.v_min);
-            u.uFrameMax.value = (frame.v_max === null || frame.v_max === undefined)
-                ? state.vMax : Number(frame.v_max);
 
             updateDangerNote();
             setFrameLabel();
@@ -939,8 +1018,10 @@
             }
             const p1 = total ? (n1 / total * 100).toFixed(2) : '0';
             const p2 = total ? (n2 / total * 100).toFixed(2) : '0';
+            const u = state.displayUnits ? ' ' + state.displayUnits : '';
             el.textContent =
-                `致伤 ≥ ${fmtNum(l1)} 占 ${p1}% 体素　|　致死 ≥ ${fmtNum(l2)} 占 ${p2}% 体素`;
+                `致伤 ≥ ${fmtVal(l1)}${u} 占 ${p1}% 体素　|　`
+                + `致死 ≥ ${fmtVal(l2)}${u} 占 ${p2}% 体素`;
         }
 
         function initLevels(res) {
@@ -956,12 +1037,17 @@
                 const n = Number(v);
                 return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
             };
-            state.lvl1 = pick(cfg.lvl1, Number((lo + span * 0.35).toPrecision(4)));
-            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.60).toPrecision(4)));
+            // 绝对 ppm 色标下的默认阈值就是固定的 420 / 1700；其它量纲
+            // （按本场峰值归一化）才退回「量程的 35% / 60%」
+            const isPpm = state.displayUnits === 'ppm';
+            state.lvl1 = pick(cfg.lvl1, isPpm
+                ? DEFAULT_LVL1 : Number((lo + span * 0.35).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, isPpm
+                ? DEFAULT_LVL2 : Number((lo + span * 0.60).toPrecision(4)));
             $('lvl1Input').value = state.lvl1;
             $('lvl2Input').value = state.lvl2;
 
-            const step = (span / 100).toPrecision(2);
+            const step = isPpm ? 10 : (span / 100).toPrecision(2);
             $('lvl1Input').step = step;
             $('lvl2Input').step = step;
             state.lvlInit = true;

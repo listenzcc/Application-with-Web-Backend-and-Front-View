@@ -2110,7 +2110,20 @@ def value_range_suffix(entry):
     """历史下拉标签里追加「量程 a ~ b」，让用户选之前就知道结果多大。
 
     量程来自各会话的 frames.json；还没出帧的会话就没有这一段。
+    entry 里带了 v_units（三维把体积分数换成 ppm 后会带）就补在数字后面。
     """
+    unit = entry.get('v_units') or ''
+    if unit:
+        # 带单位的都是已经换算过的绝对值（ppm），整数 + 千分位最好读
+        try:
+            lo_f = float(entry.get('v_min'))
+            hi_f = float(entry.get('v_max'))
+        except (TypeError, ValueError):
+            return ''
+        if not (math.isfinite(lo_f) and math.isfinite(hi_f)):
+            return ''
+        return f'  ·  量程 {lo_f:,.0f} ~ {hi_f:,.0f} {unit}'
+
     lo = fmt_number(entry.get('v_min'))
     hi = fmt_number(entry.get('v_max'))
     if lo is None or hi is None:
@@ -2602,13 +2615,15 @@ async def simulation_page_fds3d():
             label='气体（取自气体库）').classes('w-full').props('dense outlined')
         gas_info_label = ui.label('').classes('text-xs text-gray-500')
 
-        ui.label('危险区阈值（体渲染着色，体积分数）').classes(
+        ui.label('危险区阈值（体渲染着色，ppm）').classes(
             'text-xs text-gray-500 mt-2')
         with ui.grid(columns=2).classes('w-full gap-1'):
-            lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
-                                   ).props('dense outlined clearable')
-            lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
-                                   ).props('dense outlined clearable')
+            lvl1_input = ui.number('致伤 lvl1', value=None, step=10
+                                   ).props('dense outlined clearable placeholder=420')
+            lvl2_input = ui.number('致死 lvl2', value=None, step=10
+                                   ).props('dense outlined clearable placeholder=1700')
+        ui.label('留空用默认：致伤 420 / 致死 1700 ppm').classes(
+            'text-xs text-gray-500')
 
     # ---- OBST 表格 / DEVC 列表 ----
     @ui.refreshable
