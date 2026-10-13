@@ -32,6 +32,13 @@ from explorer.chemical import ChemicalDatabase
 
 from components.layout import with_layout, with_layout_full_width
 
+from accidents_stats import (
+    casualty_points,
+    gas_counts,
+    scatter_option,
+    pie_option,
+)
+
 from fds.simulate import (
     simulate_with_fds,
     get_fds_simulation_result_history,
@@ -1121,6 +1128,18 @@ async def accidents_page():
                 gases = accidents_education_df['泄漏气体'].nunique()
                 ui.label(str(gases)).classes('text-3xl font-bold text-red-700')
 
+    # 图表统计：伤亡分布（死亡人数 vs 受伤人数）+ 泄漏气体构成
+    # 两张图跟着下面的筛选走，所以建好先留着引用
+    with ui.row().classes('w-full mb-6 gap-4 items-stretch'):
+        with ui.card().classes('flex-1 p-2 min-w-[420px]'):
+            scatter_chart = ui.echart(
+                scatter_option(casualty_points(accidents_education_df))
+            ).classes('w-full h-[360px]')
+        with ui.card().classes('flex-1 p-2 min-w-[420px]'):
+            pie_chart = ui.echart(
+                pie_option(gas_counts(accidents_education_df))
+            ).classes('w-full h-[360px]')
+
     # 分类选择器 & 搜索框
     with ui.row().classes('w-full items-center mb-4'):
         # 分类选择器
@@ -1152,6 +1171,24 @@ async def accidents_page():
     # 当前显示的数据
     current_df = accidents_education_df.copy()
 
+    def refresh_chart(chart, option):
+        """整份换掉 ECharts 的 option 并推给前端。
+
+        EChart.options 是只读 property（没有 setter），只能就地改它持有的
+        那个 dict，再调 update() 让前端重跑 setOption。
+        """
+        chart.options.clear()
+        chart.options.update(option)
+        chart.update()
+
+    def update_charts(df):
+        """按当前筛选结果重画两张统计图。
+
+        数据、标题里的「共 N 起」都跟着变，不用重建组件。
+        """
+        refresh_chart(scatter_chart, scatter_option(casualty_points(df)))
+        refresh_chart(pie_chart, pie_option(gas_counts(df)))
+
     def filter_accidents(category: str, search_text: str = ''):
         """筛选事故案例"""
         nonlocal current_df
@@ -1180,6 +1217,7 @@ async def accidents_page():
             filtered_df = filtered_df[mask]
 
         current_df = filtered_df
+        update_charts(filtered_df)
         update_table()
 
     def update_table():
