@@ -97,7 +97,6 @@ abstract = abstract.replace('\n', '\n\n')
 # Add static directory - This must be done BEFORE any UI elements
 app.add_static_files('/static', 'static')  # URL path, local folder %%
 
-
 # %%
 # Gas explorer data
 gas_db = ToxicGasDatabase()
@@ -659,7 +658,7 @@ class ChemicalManagementUI:
             危险性类别分布: {', '.join([f'{k}:{v}' for k, v in stats.get(
                 'hazard_distribution', {}).items()])}
             物理状态分布: {', '.join([f'{k}:{v}' for k, v in stats.get(
-                'state_distribution', {}).items()])}
+                    'state_distribution', {}).items()])}
             平均分子量: {stats.get('avg_molecular_weight') or 0:.2f}
             沸点范围: {stats.get('boiling_point_range', 'N/A')}
             闪点范围: {stats.get('flash_point_range', 'N/A')}
@@ -1721,6 +1720,8 @@ async def root():
         #     ui.markdown(abstract)
         pass
 
+    ui.colors(brand='#FF6347')
+
     # 快速导航按钮
     with ui.row().classes('gap-4 mt-8'):
         if app.storage.user.get('authenticated', False):
@@ -1731,7 +1732,7 @@ async def root():
             ui.button('气体数据库', icon='science',
                       on_click=lambda: ui.navigate.to('/gasExplorer')).props('color=accent')
             ui.button('化学品数据库', icon='biotech',
-                      on_click=lambda: ui.navigate.to('/chemicalExplorer')).props('color=accent')
+                      on_click=lambda: ui.navigate.to('/chemicalExplorer')).props('color=brand')
         else:
             ui.button('立即登录', icon='login',
                       on_click=lambda: ui.navigate.to('/login')).props('color=primary')
@@ -1861,7 +1862,8 @@ def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', 
 def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
     """高斯模型的结果地图页，与 /map 同构，接口指向 hysplitGaussian。"""
     print(f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}')
-    html_content = Path('static/html/map_gaussian.html').read_text(encoding='utf-8')
+    html_content = Path(
+        'static/html/map_gaussian.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
@@ -1877,7 +1879,8 @@ def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757', zoom: st
 def show_map_backtrack(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
     """向前追溯的结果地图页，与 /map 同构，接口指向 hysplitBackward。"""
     print(f'Loading map_backtrack, {lat=}, {lon=}, {zoom=}, {session=}')
-    html_content = Path('static/html/map_backtrack.html').read_text(encoding='utf-8')
+    html_content = Path(
+        'static/html/map_backtrack.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
@@ -2299,7 +2302,8 @@ async def simulation_page_fds():
                           on_click=lambda index=index: remove_obstacle(index)
                           ).props('flat dense color=negative')
                 obstacle_rows.append(w)
-        ui.button('添加障碍物', icon='add', on_click=add_obstacle).props('flat dense')
+        ui.button('添加障碍物', icon='add',
+                  on_click=add_obstacle).props('flat dense')
 
     # ---- 控制条 ----
     with ui.row().classes('w-[1400px] justify-center items-end gap-2'):
@@ -2307,7 +2311,8 @@ async def simulation_page_fds():
             '开始 CFD 模型计算', icon='play_arrow').props('color=primary')
         simulation_history_select = ui.select(
             options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
-        refresh_history_button = ui.button('刷新历史', icon='refresh').props('flat dense')
+        refresh_history_button = ui.button(
+            '刷新历史', icon='refresh').props('flat dense')
         status_label = ui.label('').classes('text-sm text-gray-600')
 
     # ---- 卡片布局 ----
@@ -2599,26 +2604,35 @@ async def simulation_page_fds3d():
             + ('\n⚠ ' + '；'.join(s['warnings']) if s['warnings'] else ''))
         summary_label.classes('text-xs text-gray-600 whitespace-pre-wrap')
 
-    # ---- 顶部控制条 ----
-    with ui.row().classes('w-[1400px] justify-center items-end gap-2'):
-        simulate_button = ui.button(
-            '开始三维 CFD 计算', icon='play_arrow').props('color=primary')
-        simulation_history_select = ui.select(
-            options={}, label='载入历史三维模拟', with_input=True).classes('w-[520px]')
-        refresh_history_button = ui.button('刷新历史', icon='refresh').props('flat dense')
-        status_label = ui.label('').classes('text-sm text-gray-600')
-
     # ---- 卡片布局 ----
     with ui.row().classes('w-full justify-center items-start gap-4'):
         with ui.column().classes('w-[560px] gap-2'):
+            simulation_history_select = ui.select(
+                options={}, label='载入历史三维模拟', with_input=True).classes('w-[520px]')
+            refresh_history_button = ui.button(
+                '刷新历史', icon='refresh').props('flat dense')
+            status_label = ui.label('').classes('text-sm text-gray-600')
+
+            ui.separator()
+
             editor_card = ui.card().classes('w-full p-4 shadow-lg')
             summary_card = ui.card().classes('w-full p-3 shadow-lg')
+
+            ui.separator()
+
+            simulate_button = ui.button(
+                '开始三维 CFD 计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+
         view_card = ui.card().classes('w-[820px] h-[820px] p-0 m-0')
         gas_card = ui.card().classes('w-[300px] p-4 shadow-lg')
 
-    with ui.row().classes('w-full justify-center items-start gap-4 mt-2'):
-        obst_card = ui.card().classes('w-[760px] p-4 shadow-lg')
-        devc_card = ui.card().classes('w-[640px] p-4 shadow-lg')
+        ui.separator()
+        with ui.expansion('查看详情').classes('w-[1680px] justify-center items-start gap-4'):
+            with ui.row().classes('w-full'):
+                obst_card = ui.card().classes(
+                    'w-[760px] p-4 shadow-lg').style('max-height: 600px; overflow-y: auto;')
+                devc_card = ui.card().classes(
+                    'w-[640px] p-4 shadow-lg').style('max-height: 600px; overflow-y: auto;')
 
     # ---- FDS 编辑器 ----
     with editor_card:
@@ -2716,7 +2730,8 @@ async def simulation_page_fds3d():
                 with ui.row().classes('items-center gap-2 w-full no-wrap text-xs'):
                     ui.label(str(d.get('id') or '—')).classes('w-40')
                     xyz = d['xyz']
-                    ui.label(f"({xyz[0]:g}, {xyz[1]:g}, {xyz[2]:g})").classes('w-52')
+                    ui.label(f"({xyz[0]:g}, {xyz[1]:g}, {xyz[2]:g})").classes(
+                        'w-52')
                     ui.label(str(d.get('quantity') or '—')).classes('w-48')
             ui.label('检测点波形在三维视图里看（HUD 里的「检测点波形」按钮）'
                      ).classes('text-xs text-gray-400 mt-1')
@@ -2840,20 +2855,27 @@ async def simulation_page_fds3d():
 @with_layout_full_width
 async def simulation_page_hysplit():
     with ui.row().classes('w-[1200px] justify-center items-end gap-2'):
-        simulate_button = ui.button(
-            '开始拉格朗日模型计算', icon='play_arrow').props('color=primary')
+        pass
 
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[400px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    with weather_card:
         simulation_history_select = ui.select(
-            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+            options={}, label='载入历史模拟', with_input=True).classes('w-full')
         refresh_history_button = ui.button('刷新历史', icon='refresh').props(
             'flat dense')
         status_label = ui.label('').classes('text-sm text-gray-600')
 
-    # Layout
-    with ui.row().classes('w-full justify-center gap-4'):
-        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
-        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
-        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        ui.separator()
+
+        simulate_button = ui.button(
+            '开始拉格朗日模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+
+        ui.separator()
 
     # Simulation history
     def refresh_status(session='???'):
@@ -3164,20 +3186,27 @@ async def simulation_page_hysplit():
 @with_layout_full_width
 async def simulation_page_gaussian():
     with ui.row().classes('w-[1200px] justify-center items-end gap-2'):
-        simulate_button = ui.button(
-            '开始高斯模型计算', icon='play_arrow').props('color=primary')
+        pass
 
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[400px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    with weather_card:
         simulation_history_select = ui.select(
-            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+            options={}, label='载入历史模拟', with_input=True).classes('w-full')
         refresh_history_button = ui.button('刷新历史', icon='refresh').props(
             'flat dense')
         status_label = ui.label('').classes('text-sm text-gray-600')
 
-    # Layout
-    with ui.row().classes('w-full justify-center gap-4'):
-        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
-        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
-        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        ui.separator()
+
+        simulate_button = ui.button(
+            '开始高斯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+
+        ui.separator()
 
     # Simulation history
     def refresh_status(session='???'):
@@ -3248,7 +3277,8 @@ async def simulation_page_gaussian():
             except:
                 pass
 
-        session = simulate_with_hysplit_gaussian(sensors, config=collect_config())
+        session = simulate_with_hysplit_gaussian(
+            sensors, config=collect_config())
         update_map(session=session)
         update_simulation_history()
         refresh_status(session)
@@ -3488,20 +3518,27 @@ async def simulation_page_gaussian():
 @with_layout_full_width
 async def simulation_page_backward():
     with ui.row().classes('w-[1200px] justify-center items-end gap-2'):
-        simulate_button = ui.button(
-            '开始追溯模型计算', icon='play_arrow').props('color=primary')
+        pass
 
+    # Layout
+    with ui.row().classes('w-full justify-center gap-4'):
+        weather_card = ui.card().classes('w-[400px] p-4 shadow-lg z-10')
+        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
+        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+
+    with weather_card:
         simulation_history_select = ui.select(
-            options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
+            options={}, label='载入历史模拟', with_input=True).classes('w-full')
         refresh_history_button = ui.button('刷新历史', icon='refresh').props(
             'flat dense')
         status_label = ui.label('').classes('text-sm text-gray-600')
 
-    # Layout
-    with ui.row().classes('w-full justify-center gap-4'):
-        weather_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
-        map_card = ui.card().classes('w-[800px] h-[800px] p-0 m-0')
-        gas_card = ui.card().classes('w-[200px] p-4 shadow-lg z-10')
+        ui.separator()
+
+        simulate_button = ui.button(
+            '开始追溯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+
+        ui.separator()
 
     # Simulation history
     def refresh_status(session='???'):
@@ -3572,7 +3609,8 @@ async def simulation_page_backward():
             except:
                 pass
 
-        session = simulate_with_hysplit_backward(sensors, config=collect_config())
+        session = simulate_with_hysplit_backward(
+            sensors, config=collect_config())
         update_map(session=session)
         update_simulation_history()
         refresh_status(session)

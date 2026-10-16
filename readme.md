@@ -21,3 +21,7 @@ Documents: [PlantUML](https://plantuml.com/guide)
 - 20260324
   - Add new cases 案例一、二、三.
   - Add supports for case video.
+
+- 20261016
+  - Enlarge font size on the header.
+  - Change layout for simulation pages.

@@ -100,7 +100,7 @@ def create_header():
                     project_name, '/').classes('text-2xl font-bold text-white no-underline hover:text-blue-200')
 
                 # 主导航
-                with ui.row().classes('gap-6'):
+                with ui.row().classes('gap-6 text-xl'):
                     ui.link('介绍页', '/',
                             ).classes('text-gray-200 hover:text-white no-underline font-medium')
 
@@ -109,7 +109,7 @@ def create_header():
                     with ui.button('扩散仿真(拉格朗日/追溯)') \
                             .props('flat dense no-caps color=white') \
                             .style('min-height:0; padding:0;') \
-                            .classes('font-medium items-center'):
+                            .classes('font-medium items-center text-xl'):
                         with ui.menu().props('auto-close'):
                             ui.menu_item('拉格朗日模型',
                                          lambda: ui.navigate.to('/simulationHysplit'))
