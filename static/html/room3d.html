@@ -316,6 +316,13 @@
         const DEFAULT_LVL1 = 420;
         const DEFAULT_LVL2 = 1700;
 
+        // OBST 默认色：conf/fds3d_obst_color.yml 里没给这个 OBST 配色时的样子。
+        // 配了色的 OBST 由接口在 environment.obst[i].color 里带过来（#rrggbb）。
+        const OBST_FILL = 0x9aa7b1;
+        const OBST_WIRE = 0x546e7a;
+        // 面色不透明度：太低会被背景冲淡（看着像只有边框有色），0.75 兼顾显色与透视
+        const OBST_OPACITY = 0.75;
+
         // 与二维页面共用的色标（viridis 五段）与危险区配色
         const VIRIDIS = [
             [0x44, 0x01, 0x54], [0x41, 0x44, 0x87], [0x2A, 0x78, 0x8E],
@@ -359,6 +366,17 @@
         container.appendChild(renderer.domElement);
 
         const scene = new THREE.Scene();
+
+        // 灯：OBST 用的是受光材质，场景里一盏灯都没有的话填充面会算成黑的
+        // （只剩无光照的线框有色）。环境光打底 + 主光/补光给体块一点明暗层次。
+        // 体渲染是自定义 shader、网格和 DEVC 点是无光照材质，都不受这里影响。
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.7);
+        const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+        keyLight.position.set(1.0, -1.2, 1.8);
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        fillLight.position.set(-1.2, 1.0, 0.6);
+        scene.add(ambientLight, keyLight, fillLight);
+
         // FDS 的 z 轴朝上，让相机也跟着用 z-up
         const camera = new THREE.PerspectiveCamera(
             45, container.clientWidth / container.clientHeight, 0.005, 5000);
@@ -591,16 +609,23 @@
             obst.forEach((o) => {
                 const [a, b, c, d, e, f] = o.xb;
                 const geo = new THREE.BoxGeometry(b - a, d - c, f - e);
-                const mat = new THREE.MeshStandardMaterial({
-                    color: 0x9aa7b1, transparent: true, opacity: 0.55,
-                    roughness: 0.9, metalness: 0.0,
+                // 颜色来自 conf/fds3d_obst_color.yml（按 OBST 名匹配）；没配就用默认色
+                const base = new THREE.Color(o.color || OBST_FILL);
+                // 用 Lambert（受光但有环境光打底），保证面色跟着配置走
+                const mat = new THREE.MeshLambertMaterial({
+                    color: base.clone(), transparent: true,
+                    opacity: OBST_OPACITY,
                 });
                 const m = new THREE.Mesh(geo, mat);
                 m.position.set((a + b) / 2, (c + d) / 2, (e + f) / 2);
                 obstGroup.add(m);
                 const wire = new THREE.LineSegments(
                     new THREE.EdgesGeometry(geo),
-                    new THREE.LineBasicMaterial({ color: 0x546e7a }));
+                    new THREE.LineBasicMaterial({
+                        // 配了色的用同色加深作边框，没配就用默认灰蓝
+                        color: o.color ? base.clone().multiplyScalar(0.55)
+                                       : OBST_WIRE,
+                    }));
                 wire.position.copy(m.position);
                 obstGroup.add(wire);
             });

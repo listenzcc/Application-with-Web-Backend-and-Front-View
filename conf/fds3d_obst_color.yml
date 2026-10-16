@@ -1,0 +1,36 @@
+# FDS 三维（fds3d）OBST 染色配置
+#
+# 用法
+#   OBST 的 ID 形如 `xxx_yyy`（如 Pipe_Upstream、Office_03），本表按
+#   **第一个下划线之前的那一段**（即 xxx）去匹配 OBST 名。ID 里没有下划线
+#   时（如 BLEVE、Desulf01）就用整个 ID 去匹配。
+#
+#   匹配到的按该颜色绘制；匹配不到（或本文件不存在）就用默认色
+#   #9aa7b1（半透明 0.55，边框加深）。
+#
+# 颜色写法
+#   "#rrggbb"、"0xrrggbb"、"rrggbb" 都可以，也接受 CSS 颜色名（red / orange）。
+#
+# 生效方式
+#   本文件在**每次打开三维结果时重新读取**，改完直接刷新页面即可，不用重启服务。
+#
+# 下面是当前 FDS 卡里出现过的 OBST 名，取消注释并填色即可启用。
+
+colors:
+  BLEVE: "#c1121f" # 泄漏点（沸腾液体扩展蒸气爆炸）
+  GasHolder: "#e07a00" # 气柜
+  DustCollector: "#8d6e00" # 除尘器
+  Desulf01: "#1565c0" # 脱硫塔
+  Desulf02: "#1565c0"
+  Desulf03: "#1565c0"
+  Desulf04: "#1565c0"
+  Desulf05: "#1565c0"
+  Desulf06: "#1565c0"
+  Desulf07: "#1565c0"
+  Desulf08: "#1565c0"
+  Chimney: "#6d4c41" # 烟囱
+  Tower: "#00838f" # 塔
+  Pipe: "#607d8b" # 管道
+  Workshop: "#2e7d32" # 厂房
+  Office: "#3949ab" # 办公楼
+  Control: "#5e35b1" # 控制室

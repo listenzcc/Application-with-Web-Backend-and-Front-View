@@ -59,6 +59,12 @@ P3D_DIR = 'p3d'          # fds2ascii 导出的体积文本，转完就删
 #: 体数据的物理量。跟二维页面的「浓度」是同一个量（CO 体积分数）
 VOLUME_QUANTITY = 'VOLUME FRACTION'
 
+#: OBST 染色配置。放在 conf/ 下，改完刷新页面即可生效（每次取结果都重读）
+OBST_COLOR_CONF = 'fds3d_obst_color.yml'
+
+#: OBST 默认色（前端没拿到 color 时用的就是这组；这里只是注释备查）
+#: 填充 #9aa7b1 半透明 0.55，边框 #546e7a
+
 #: 一次模拟最多允许多少个体数据帧，PL3D 每帧都是几十 MB 的文本
 MAX_VOLUME_FRAMES = 60
 
@@ -316,6 +322,89 @@ def _read_frames_meta(d: Path) -> dict:
         return {}
 
 
+def obst_name(oid) -> str:
+    """OBST 名 = ID 里第一个下划线之前那一段。
+
+    `Pipe_Upstream` -> `Pipe`，`Office_03` -> `Office`；
+    没有下划线的（`BLEVE`）整段就是名字。
+    """
+    s = str(oid or '').strip()
+    return s.split('_')[0] if s else ''
+
+
+def normalize_color(value):
+    """把配置里写的颜色统一成 `#rrggbb`（CSS 颜色名原样返回）。
+
+    认得的写法：`#rrggbb` / `0xrrggbb` / `rrggbb`；其它一律原样交给浏览器，
+    由 three.js 的 THREE.Color 去解析（red、orange 这类名字也支持）。
+    """
+    s = str(value or '').strip()
+    if not s:
+        return None
+    if s.startswith('#'):
+        return s
+    if s.lower().startswith('0x'):
+        return '#' + s[2:]
+    if re.fullmatch(r'[0-9a-fA-F]{6}', s):
+        return '#' + s
+    return s
+
+
+def load_obst_colors() -> dict:
+    """读 `conf/fds3d_obst_color.yml`，返回 {OBST 名: '#rrggbb'}。
+
+    文件不存在或者格式不对都返回空字典——那样 OBST 就全用默认色，
+    所以这个文件是纯可选的，删掉也不影响功能。
+    每次取结果都重读一遍，改完刷新页面即可生效。
+    """
+    p = PROJECT_ROOT / 'conf' / OBST_COLOR_CONF
+    if not p.is_file():
+        return {}
+
+    raw = {}
+    try:
+        from omegaconf import OmegaConf
+        cfg = OmegaConf.load(str(p))
+        section = cfg.get('colors') if hasattr(cfg, 'get') else None
+        if section is not None:
+            raw = {str(k): v for k, v in dict(section).items()}
+    except Exception:
+        raw = {}
+
+    if not raw:
+        try:
+            import yaml
+            text = p.read_text(encoding='utf-8')
+            raw = {
+                str(k): v
+                for k, v in ((yaml.safe_load(text) or {}).get('colors') or {}).items()
+            }
+        except Exception:
+            return {}
+
+    out = {}
+    for k, v in raw.items():
+        c = normalize_color(v)
+        if k and c:
+            out[k] = c
+    return out
+
+
+def apply_obst_colors(env: dict) -> dict:
+    """按配置给环境里的每个 OBST 挂上 `color` 字段（没配的不挂）。
+
+    前端拿到 color 就用它画，拿不到就用默认色。
+    """
+    colors = load_obst_colors()
+    if not colors:
+        return env
+    for o in (env or {}).get('obst') or []:
+        c = colors.get(obst_name(o.get('id')))
+        if c:
+            o['color'] = c
+    return env
+
+
 def display_meta(meta: dict) -> dict:
     """把 frames.json 的量纲信息摊成「显示单位」下的一组数。
 
@@ -453,7 +542,7 @@ def get_fds3d_simulation_result(session: str) -> dict:
     if template_path.is_file():
         text = template_path.read_text(encoding='utf-8', errors='replace')
         result['template'] = text
-        result['environment'] = parse_fds_environment(text)
+        result['environment'] = apply_obst_colors(parse_fds_environment(text))
     else:
         result['environment'] = parse_fds_environment('')
 
