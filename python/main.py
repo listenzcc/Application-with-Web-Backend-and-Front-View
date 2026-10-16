@@ -2636,7 +2636,7 @@ async def simulation_page_fds3d():
 
     # ---- FDS 编辑器 ----
     with editor_card:
-        ui.label('FDS 输入卡（直接编写完整 FDS）').classes('text-h6 mb-2')
+        ui.label('CFD 配置文件输入卡').classes('text-h6 mb-2')
         fds_editor = ui.textarea(
             value=get_fds3d_default_template(),
             on_change=lambda e: update_summary(),
@@ -2644,9 +2644,9 @@ async def simulation_page_fds3d():
             'dense outlined rows=18 '
             'input-style="font-family:Consolas,monospace;font-size:12px"')
         with ui.row().classes('w-full gap-2 mt-2'):
-            ui.button('从 FDS 解析表格', icon='sync_alt',
+            ui.button('从配置文件解析表格', icon='sync_alt',
                       on_click=sync_from_editor).props('flat dense')
-            ui.button('把 OBST 表格写回 FDS', icon='save',
+            ui.button('把 OBST 表格写回配置文件', icon='save',
                       on_click=writeback_to_editor).props('flat dense')
             ui.button('重置为默认模板', icon='restart_alt',
                       on_click=lambda: reset_editor()).props('flat dense')
@@ -2674,7 +2674,7 @@ async def simulation_page_fds3d():
                                    ).props('dense outlined clearable placeholder=420')
             lvl2_input = ui.number('致死 lvl2', value=None, step=10
                                    ).props('dense outlined clearable placeholder=1700')
-        ui.label('留空用默认：致伤 420 / 致死 1700 ppm').classes(
+        ui.label('默认值：致伤 420 / 致死 1700 ppm').classes(
             'text-xs text-gray-500')
 
     # ---- OBST 表格 / DEVC 列表 ----
@@ -2737,11 +2737,11 @@ async def simulation_page_fds3d():
                      ).classes('text-xs text-gray-400 mt-1')
 
     with obst_card:
-        ui.label('障碍物 OBST（表格 ⇄ FDS 文本联动）').classes('text-h6 mb-2')
+        ui.label('障碍物 OBST').classes('text-h6 mb-2')
         render_obst_table()
 
     with devc_card:
-        ui.label('检测点 DEVC（在 FDS 文本里定义，这里只读展示）').classes('text-h6 mb-2')
+        ui.label('检测点 DEVC').classes('text-h6 mb-2')
         render_devc_table()
 
     # ---- 三维视图 ----
