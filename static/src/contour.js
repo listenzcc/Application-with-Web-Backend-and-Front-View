@@ -421,8 +421,15 @@
         for (let k = 0; k < values.length; k++) {
             if (mask[k]) frontier.push(k);
         }
+        // 只往「还没被渗过的补边格子」里渗：补边格子初值恒为 outside，
+        // 渗过一次就变成 outside 以下的值，用它当标记即可。
+        //
+        // 这里必须判等，不能判 values[n] > outside：渗过几层之后值会掉到
+        // outside 以下，那些格子就又变成「可渗」，每一趟都被邻居重新灌一遍、
+        // 再塞回 frontier，frontier 按 4 的趟数次方膨胀 —— 十几趟就是上亿项，
+        // 直接把浏览器堆吃光（RangeError: Invalid array length / 页面 OOM）。
         const spread = (idx, n) => {
-            if (values[n] > outside) return false;
+            if (values[n] !== outside) return false;
             values[n] = values[idx] - step;
             return true;
         };

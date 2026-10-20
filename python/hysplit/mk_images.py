@@ -122,7 +122,13 @@ def collect_and_generate_images(folder: Path, year: int = None):
         imageio.mimsave(gif_filename, images, duration=0.5)
         print(f"Generated GIF: {gif_filename}")
 
-    table.to_json(folder / TABLE_NAME)
+    # 前端只用这五列：帧号、经纬度、归一化浓度。其余列不落盘。
+    # 高斯模型一场泄漏点很多，表能到十万行，全列存下来 JSON 十几 MB，
+    # 浏览器解析出来的对象图还要占几十 MB 堆，历史回看时先把内存吃光。
+    slim = table[['DAY', 'HR', 'LAT', 'LON', 'm']].copy()
+    for col in ('LAT', 'LON', 'm'):
+        slim[col] = slim[col].round(4)
+    slim.to_json(folder / TABLE_NAME)
     _write_frames(folder, frames, vmin, vmax)
 
     return len(frames)

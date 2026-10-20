@@ -11,8 +11,8 @@ hysplitGaussian/template/ 里姜老师给的版本（initd = 3，
     hysplitGaussian/simulation/<YYYY-MM-DD-HH-MM-SS-UUID>/
 
 会话目录内容：
-    config.json      本次运行参数（含界面上填的气象条件，存档用）
-    sensors.json     本次用的传感器与读数
+    config.json      本次运行参数（含城市、计算域、界面气象，存档用）
+    stations.json    本次用的城市监测点与读数
     CONTROL          主输入卡
     EMITIMES         释放源文件
     SETUP.CFG        HYSPLIT 设置（initd = 3，高斯模型，从模板复制）
@@ -44,9 +44,13 @@ from hysplit.mk_images import collect_and_generate_images
 from hysplit.simulate import (
     resolve_met_file,
     build_points,
+    build_station_marks,
     simulation_status,
     _run_exe,
+    read_stations,
 )
+from hysplit.stations import (city_bbox, city_center, resolve_city,
+                              stations_for_simulation)
 
 # %%
 # python/hysplit_gaussian/simulate.py -> python/hysplit_gaussian -> python -> <root>
@@ -62,6 +66,9 @@ HYSPLIT_GRAPHICS = HYSPLIT_HOME / 'graphics'
 SESSION_TS_FMT = '%Y-%m-%d-%H-%M-%S'
 
 CONFIG_NAME = 'config.json'
+#: 新会话写这个：城市监测点 + 读数
+STATIONS_NAME = 'stations.json'
+#: 旧会话的传感器文件，只读兼容
 SENSORS_NAME = 'sensors.json'
 SUCCESS_MARKER = 'success'
 FAILED_MARKER = 'failed'
@@ -79,24 +86,28 @@ CDUMP_NAME = 'cdump'
 #: SETUP.CFG 与拉格朗日模型的区别就在这里（initd = 3 -> 高斯模型）。
 COPIED_TEMPLATES = ('SETUP.CFG', 'ASCDATA.CFG')
 
-#: 计算域（经纬度框）。与拉格朗日模型保持一致。
-DEFAULT_BBOX = {'lat1': 30.0, 'lat2': 31.0, 'lon1': 110.0, 'lon2': 111.0}
+#: 旧会话（sensors.json 归一化坐标）换算经纬度时用的框。
+#: 新会话的计算域跟着城市走，见 stations.city_bbox()。
+LEGACY_BBOX = {'lat1': 30.0, 'lat2': 31.0, 'lon1': 110.0, 'lon2': 111.0}
+DEFAULT_BBOX = LEGACY_BBOX
 BBOX_LAT1, BBOX_LAT2 = 30.0, 31.0
 BBOX_LON1, BBOX_LON2 = 110.0, 111.0
 
 WEATHER_OPTIONS = ['晴', '多云', '阴', '雨', '雪', '雾']
 WIND_DIRECTIONS = ['北', '东北', '东', '东南', '南', '西南', '西', '西北']
 
-LOCATION_CANDIDATES = {
-    '北京': {'lat': 39.9042, 'lon': 116.4074, 'zoom': 4},
-    '上海': {'lat': 31.2304, 'lon': 121.4737, 'zoom': 4},
-    '武威': {'lat': 37.9282, 'lon': 102.6346, 'zoom': 4},
-    '张掖': {'lat': 38.9259, 'lon': 100.4498, 'zoom': 4},
-}
+
+def _location_candidates() -> dict:
+    """老接口：城市名 -> 地图中心。数据源统一到 stations.CITIES。"""
+    from hysplit.stations import city_names
+    return {name: city_center(name) for name in city_names()}
+
+
+LOCATION_CANDIDATES = _location_candidates()
 
 DEFAULT_CONFIG = {
     # ---- 界面上的地理 / 气象（气象部分不参与计算，随运行存档）----
-    'location': '北京',
+    'city': '北京',
     'weather': '晴',
     'temperature': 20.0,
     'humidity': 50.0,
@@ -137,12 +148,23 @@ def simulation_dir(session: str) -> Path:
 
 
 def merge_config(config: dict = None) -> dict:
-    """界面传来的 config 与默认值合并。None 值不覆盖默认值。"""
+    """界面传来的 config 与默认值合并。None 值不覆盖默认值。
+
+    顺便把城市收敛成合法值，并把计算域算好写进 config：历史会话回看时
+    直接读存档的 bbox，不受以后改城市预设的影响。
+    """
     merged = dict(DEFAULT_CONFIG)
     if config:
         for k, v in config.items():
             if v is not None:
                 merged[k] = v
+
+    merged['city'] = resolve_city(merged.get('city'))
+    bbox = merged.get('bbox')
+    if not isinstance(bbox, dict) or not {'lat1', 'lat2', 'lon1', 'lon2'} <= set(bbox):
+        bbox = city_bbox(merged['city'])
+    merged['bbox'] = {k: float(bbox[k]) for k in ('lat1', 'lat2', 'lon1', 'lon2')}
+    merged['city_center'] = city_center(merged['city'])
     return merged
 
 
@@ -227,17 +249,21 @@ def _met_dir_for_control(met_dir) -> str:
 # ---- 跑模型 ----
 
 
-def simulate_with_hysplit_gaussian(sensors: list, session: str = None,
+def simulate_with_hysplit_gaussian(stations: list = None, session: str = None,
                                    config: dict = None) -> str:
-    """起一次高斯模型模拟（后台进程），立刻返回 session。"""
+    """起一次高斯模型模拟（后台进程），立刻返回 session。
+
+    stations 省略时按 config['city'] 现场生成城市监测点（含监测数据）。
+    """
     session = session or mk_hysplit_gaussian_session()
     cfg = merge_config(config)
+    stations = stations or stations_for_simulation(cfg['city'], cfg)
 
     dst = simulation_dir(session)
     dst.mkdir(parents=True, exist_ok=True)
 
-    (dst / SENSORS_NAME).write_text(
-        json.dumps(sensors or [], ensure_ascii=False, indent=2),
+    (dst / STATIONS_NAME).write_text(
+        json.dumps(stations, ensure_ascii=False, indent=2),
         encoding='utf-8')
     (dst / CONFIG_NAME).write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -250,14 +276,14 @@ def simulate_with_hysplit_gaussian(sensors: list, session: str = None,
             pass
 
     p = mp.Process(target=_run_hysplit_gaussian_job,
-                   kwargs=dict(sensors=sensors or [], config=cfg,
+                   kwargs=dict(stations=stations, config=cfg,
                                session=session),
                    daemon=False)
     p.start()
     return session
 
 
-def _run_hysplit_gaussian_job(sensors: list, config: dict, session: str):
+def _run_hysplit_gaussian_job(stations: list, config: dict, session: str):
     """后台工作进程：准备文件 -> 跑模型 -> 后处理 -> 写标记。"""
     dst = simulation_dir(session)
     started = time.time()
@@ -282,13 +308,13 @@ def _run_hysplit_gaussian_job(sensors: list, config: dict, session: str):
     log(f'HYSPLIT Gaussian job start: {session}')
     try:
         # 1) 释放点
-        points = build_points(sensors, config)
+        points = build_points(stations, config)
         if not points:
-            finish(FAILED_MARKER, '失败：没有可用的传感器作为释放点')
+            finish(FAILED_MARKER, '失败：没有可用的监测点作为释放点')
             return
         if sum(p['mass'] for p in points) <= 0:
             finish(FAILED_MARKER,
-                   '失败：所有传感器读数都是空的，没有有效释放质量')
+                   '失败：所有监测点读数都是空的，没有有效释放质量')
             return
 
         # 2) 气象文件
@@ -399,8 +425,8 @@ def get_hysplit_gaussian_simulation_template(session: str) -> str:
         return ''
 
 
-def build_environment(dst: Path, config: dict, sensors: list) -> dict:
-    """前端画图需要的环境信息：经纬度框、释放点、气象来源。"""
+def build_environment(dst: Path, config: dict, stations: list) -> dict:
+    """前端画图需要的环境信息：城市、经纬度框、监测点、气象来源。"""
     year = int(config.get('year') or 0)
     month = int(config.get('month') or 0)
     day = int(config.get('day') or 0)
@@ -409,17 +435,26 @@ def build_environment(dst: Path, config: dict, sensors: list) -> dict:
     met_dir, _ = resolve_met_file(year, month, day) if met_name else (None, '')
 
     release_points = []
-    for p in build_points(sensors, config):
+    for p in build_points(stations, config):
         release_points.append({
+            'station_id': p['station_id'],
             'sensor_id': p['sensor_id'],
+            'name': p['name'],
             'lon': round(p['lon'], 4),
             'lat': round(p['lat'], 4),
             'height': p['height'],
             'mass': p['mass'],
         })
 
+    city = resolve_city(config.get('city'))
+    bbox = config.get('bbox') if isinstance(config.get('bbox'), dict) else None
+    if not bbox:
+        bbox = city_bbox(city) if config.get('city') else LEGACY_BBOX
+
     return {
-        **DEFAULT_BBOX,
+        **{k: float(bbox[k]) for k in ('lat1', 'lat2', 'lon1', 'lon2')},
+        'city': city if config.get('city') else '',
+        'city_center': config.get('city_center') or city_center(city),
         'top_height': float(config.get('top_height') or 0),
         'release_height': float(config.get('release_height') or 0),
         'year': year, 'month': month, 'day': day,
@@ -430,6 +465,7 @@ def build_environment(dst: Path, config: dict, sensors: list) -> dict:
         'met_available': met_dir is not None,
         'weather_mode': config.get('weather_mode', 'file'),
         'release_points': release_points,
+        'stations': build_station_marks(stations),
     }
 
 
@@ -468,7 +504,7 @@ def get_hysplit_gaussian_simulation_result(session: str) -> dict:
     config = _read_json(dst / CONFIG_NAME, {}) or {}
     out['config'] = config
 
-    sensors = _read_json(dst / SENSORS_NAME, []) or []
+    stations = read_stations(dst)
 
     frames_doc = _read_json(dst / FRAMES_NAME, {}) or {}
     out['frames'] = frames_doc.get('frames') or []
@@ -480,7 +516,7 @@ def get_hysplit_gaussian_simulation_result(session: str) -> dict:
         out['gif'] = GIF_NAME
 
     out['template'] = get_hysplit_gaussian_simulation_template(session)
-    out['environment'] = build_environment(dst, config, sensors)
+    out['environment'] = build_environment(dst, config, stations)
 
     return out
 

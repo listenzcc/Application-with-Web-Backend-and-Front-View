@@ -240,6 +240,7 @@
 
     <script>
         const sessionStr = "{{session}}";
+        const cityStr = "{{city}}";
         const resultApiUrl = `/get_hysplit_gaussian_simulation_result/${encodeURIComponent(sessionStr)}`;
         const frameApiUrl = (frame) => `/get_hysplit_gaussian_simulation_frame?session=${encodeURIComponent(sessionStr)}&frame=${encodeURIComponent(frame)}`;
         const tableApiUrl = `/get_hysplit_gaussian_simulation_table_json?session=${encodeURIComponent(sessionStr)}`;
@@ -267,6 +268,7 @@
             pointsCache: new Map(),   // 帧号 -> 该帧散点
             gridCache: new Map(),     // 帧号 -> 该帧规则网格
             gridGeom: null,           // 会话级固定网格几何（全部帧共用）
+            centeredSession: null,    // 已经做过「挪到监测点中心」的会话
             plumeSmall: null,         // gw x gh 的小画布，逐像素上色
             plumeCanvas: null,        // 放大后的烟羽画布，mapbox canvas 源引用它
         };
@@ -350,7 +352,7 @@
             $('playBtn').disabled = !has;
             setFrameLabel();
 
-            drawEnvMarkers(resp.environment);
+            drawStationsFromEnv(resp.environment);
             if (has && state.mapReady) renderFrame();
         }
 
@@ -392,19 +394,109 @@
             drawContours();
         }
 
-        /** 在图上标出释放点（来自 environment.release_points） */
-        function drawEnvMarkers(env) {
-            if (!env || !env.release_points || state.releaseDrawn) return;
-            env.release_points.forEach(p => {
+        /**
+         * 监测点标记。
+         * 数据来自城市监测点（stations.json），不再轮询传感器库；
+         * 没有选中会话时先按城市拉一份预览，打开页面就能看到点位。
+         */
+        let stationMarkers = [];
+
+        function stationColor(value, vmax) {
+            const t = Math.max(0, Math.min(1, (Number(value) || 0) / (vmax || 1)));
+            // 绿 -> 黄 -> 橙 -> 红（浓度越高越危险）
+            const stops = [[0, [46, 160, 67]], [0.35, [214, 190, 40]],
+                           [0.7, [232, 122, 32]], [1, [200, 32, 32]]];
+            for (let i = 1; i < stops.length; i++) {
+                if (t <= stops[i][0]) {
+                    const [t0, c0] = stops[i - 1];
+                    const [t1, c1] = stops[i];
+                    const k = (t - t0) / (t1 - t0 || 1);
+                    const c = c0.map((v, j) => Math.round(v + (c1[j] - v) * k));
+                    return `rgb(${c[0]},${c[1]},${c[2]})`;
+                }
+            }
+            return 'rgb(200,32,32)';
+        }
+
+        function clearStations() {
+            stationMarkers.forEach(m => m.remove());
+            stationMarkers = [];
+        }
+
+        function drawStations(list) {
+            if (!list || !list.length) return;
+            clearStations();
+            const vmax = Math.max(...list.map(s => Number(s.value) || 0), 0.001);
+            list.forEach(s => {
+                const v = Number(s.value);
+                const color = stationColor(v, vmax);
                 const el = document.createElement('div');
-                el.style.cssText = 'width:10px;height:10px;border-radius:50%;' +
-                    'background:#D85A30;border:2px solid #fff;box-shadow:0 0 3px #0006;';
-                el.title = `${p.sensor_id || 'release'}  ${p.mass}`;
-                new mapboxgl.Marker({ element: el })
-                    .setLngLat([p.lon, p.lat])
-                    .addTo(map);
+                el.style.cssText = 'display:flex;align-items:center;gap:3px;' +
+                    'white-space:nowrap;cursor:default;';
+                el.innerHTML =
+                    `<span style="width:9px;height:9px;border-radius:50%;display:inline-block;` +
+                    `background:${color};border:2px solid #fff;box-shadow:0 0 3px #0007"></span>` +
+                    `<span style="font-size:10px;line-height:12px;color:#0a2540;` +
+                    `background:rgba(255,255,255,.82);border-radius:3px;padding:0 3px">` +
+                    `${s.station_id || ''} ${isNaN(v) ? '—' : v.toFixed(3)}</span>`;
+                el.title = `${s.name || ''}（${s.kind || ''}）`;
+                stationMarkers.push(new mapboxgl.Marker({ element: el })
+                    .setLngLat([s.lon, s.lat])
+                    .addTo(map));
             });
-            state.releaseDrawn = true;
+        }
+
+        /** 结果接口里的 environment.stations 优先；没有就按城市预览 */
+        function drawStationsFromEnv(env) {
+            if (env && env.stations && env.stations.length) {
+                drawStations(env.stations);
+                centerOnStations(env.stations);
+                state.releaseDrawn = true;
+                return;
+            }
+            if (!state.releaseDrawn) previewCityStations();
+        }
+
+        /**
+         * 选中历史会话时把地图挪到监测点的中心。
+         * 历史会话的释放点可能离城市中心很远（高斯模型尤其），
+         * 按 URL 里的中心打开往往看不到点位，得手动拖。
+         * 同一个会话只挪一次：refresh 轮询会重复走到这里，每次都挪会抢镜头。
+         */
+        function centerOnStations(list) {
+            if (!list || !list.length) return;
+            if (!sessionStr || sessionStr === '???') return;
+            if (state.centeredSession === sessionStr) return;
+            let lon = 0, lat = 0, n = 0;
+            for (const s of list) {
+                const x = Number(s.lon), y = Number(s.lat);
+                if (!isFinite(x) || !isFinite(y)) continue;
+                lon += x; lat += y; n++;
+            }
+            if (!n) return;
+            state.centeredSession = sessionStr;
+            const target = [lon / n, lat / n];
+            // 样式还没就绪时 easeTo 会被地图初始化的相机设置覆盖，
+            // 先记下来，等 load 之后再挪
+            if (map.isStyleLoaded()) {
+                map.easeTo({ center: target, duration: 600 });
+            } else {
+                state.pendingCenter = target;
+            }
+        }
+
+        async function previewCityStations() {
+            if (!cityStr || cityStr === '???') return;
+            try {
+                const r = await fetch('/get_city_stations?city=' +
+                    encodeURIComponent(cityStr));
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const doc = await r.json();
+                drawStations(doc.stations || []);
+                state.releaseDrawn = true;
+            } catch (e) {
+                console.warn('城市监测点预览失败', e);
+            }
         }
     </script>
 
@@ -428,9 +520,14 @@
 
         map.on('load', () => {
             setupCanvasOverlay();
-            setupCanvasOverlay1();
             setupSimulationOverlay();
             state.mapReady = true;
+
+            // 加载完成前记下的「挪到监测点中心」在这里补上
+            if (state.pendingCenter) {
+                map.easeTo({ center: state.pendingCenter, duration: 600 });
+                state.pendingCenter = null;
+            }
 
             $('frameRange').addEventListener('input', onFrameInput);
             $('playBtn').addEventListener('click', togglePlay);
@@ -727,12 +824,13 @@
             // 跟 FDS 房间页共用一份实现。
             // 网格几何用会话级固定的（ensureGridGeom），烟羽图和等值线
             // 才能落在同一张网上。
-            // smooth=2：散点直接等值线会出现一堆孤立碎块，平滑两遍才连得成片。
+            // smooth=1：散点直接等值线会出现一堆孤立碎块，平滑一遍就能连成片。
+            // 遍数是内存/画质的折中（每遍都要一份全网格副本），历史回看够用了。
             const grid = Contour.gridFromPoints(points, {
                 grid: state.gridGeom,
                 pad: GRID_PAD,
                 step: GRID_FALLBACK_STEP,
-                smooth: 2,
+                smooth: 1,
             });
             state.gridCache.set(frame.index, grid);
             return grid;
@@ -841,7 +939,7 @@
                 const polygons = [];
                 const lines = [];
                 for (const ring of rings) {
-                    const smooth = Contour.smoothRing(ring, 2);
+                    const smooth = Contour.smoothRing(ring, 1);
                     const poly = ringToFeature(smooth, grid, true);
                     const line = ringToFeature(smooth, grid, false);
                     if (poly) polygons.push(poly);
@@ -934,76 +1032,6 @@
             });
         }
 
-        /**
-         * 拉传感器数据并画到 canvas 上
-         */
-        async function drawSensorsOnCanvas(apiUrl, canvas, customStyles = {}) {
-            if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
-                throw new Error('有效的canvas元素是必需的');
-            }
-
-            const response = await fetch(apiUrl);
-            if (!response.ok) {
-                throw new Error(`HTTP错误: ${response.status}`);
-            }
-            const sensors = await response.json();
-
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('无法获取canvas上下文');
-
-            const defaultStyles = {
-                humidity: { color: 'rgba(65, 105, 225, 0.8)', radius: 8, borderColor: 'rgba(30, 144, 255, 1)', labelColor: 'black' },
-                temp: { color: 'rgba(220, 20, 60, 0.8)', radius: 10, borderColor: 'rgba(255, 69, 0, 1)', labelColor: 'black' },
-                default: { color: 'rgba(50, 205, 50, 0.8)', radius: 8, borderColor: 'rgba(34, 139, 34, 1)', labelColor: 'black' },
-                fontSize: 12,
-                fontFamily: 'Arial'
-            };
-            const styles = { ...defaultStyles, ...customStyles };
-
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            sensors.forEach(sensor => drawSingleSensor(ctx, canvas, sensor, styles));
-            return sensors;
-        }
-
-        function drawSingleSensor(ctx, canvas, sensor, styles) {
-            const sensorId = (sensor.sensor_id || '').toLowerCase();
-            let type = 'default';
-            if (sensorId.includes('humidity')) type = 'humidity';
-            else if (sensorId.includes('temp')) type = 'temp';
-            const style = styles[type] || styles.default;
-
-            // 与 simulate.py 里的 BBOX 保持一致
-            const lat1 = 30, lat2 = 31, lon1 = 110, lon2 = 111;
-            const lat = (1 - sensor.y_position) * (lat2 - lat1) + lat1;
-            const lon = sensor.x_position * (lon2 - lon1) + lon1;
-
-            if (sensorId in mapMarkers) {
-                const { el } = mapMarkers[sensorId];
-                const v = (typeof sensor.value === 'number') ? sensor.value.toFixed(4) : '—';
-                el.innerHTML = '<div>' + sensor.sensor_id + '</div><div>' + v + '</div>';
-            } else {
-                const el = document.createElement('div');
-                el.innerHTML = sensor.sensor_id;
-                const marker = new mapboxgl.Marker({ color: style.color, scale: 1.0 })
-                    .setLngLat([lon, lat]).addTo(map);
-                const tMarker = new mapboxgl.Marker({ element: el, color: style.color, anchor: 'top', scale: 1.0 })
-                    .setLngLat([lon, lat]).addTo(map);
-                mapMarkers[sensorId] = Object.assign({}, { marker, el, tMarker });
-            }
-        }
-
-        function setupCanvasOverlay1() {
-            const canvas = document.getElementById('overlayCanvas');
-
-            drawSensorsOnCanvas('/latest_sensor_data', canvas)
-                .then(sensors => console.log(`绘制了 ${sensors.length} 个传感器`))
-                .catch(e => console.warn('传感器绘制失败', e));
-
-            setInterval(() => {
-                drawSensorsOnCanvas('/latest_sensor_data', canvas)
-                    .catch(() => { });
-            }, 5000);
-        }
     </script>
 </body>
 

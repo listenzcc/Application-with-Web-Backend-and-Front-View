@@ -7,6 +7,7 @@ import pandas as pd
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import quote
 from omegaconf import OmegaConf
 
 from nicegui import app, ui
@@ -71,7 +72,14 @@ from hysplit.simulate import (
     simulation_dir as hysplit_simulation_dir,
     WEATHER_OPTIONS,
     WIND_DIRECTIONS,
-    LOCATION_CANDIDATES,
+)
+from hysplit.stations import (
+    city_names,
+    city_info,
+    city_center,
+    monitoring as city_monitoring,
+    stations_for_simulation as city_stations_for_simulation,
+    VALUE_UNIT,
 )
 from hysplit_gaussian.simulate import (
     simulate_with_hysplit_gaussian,
@@ -1843,14 +1851,16 @@ def serve_pdf(case_name: str):
 
 
 @app.get('/map')
-def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
+def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4',
+             session: str = '???', city: str = ''):
     # params = dict(request.query_params)
-    print(f'Loading map, {lat=}, {lon=}, {zoom=}, {session=}')
+    print(f'Loading map, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
     html_content = Path('static/html/map.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
         '"{{lon}}"': lon,
+        '{{city}}': city,
         '{{session}}': session,
     }
     for k, v in changes.items():
@@ -1859,15 +1869,17 @@ def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', 
 
 
 @app.get('/map_gaussian')
-def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
+def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757',
+                      zoom: str = '4', session: str = '???', city: str = ''):
     """高斯模型的结果地图页，与 /map 同构，接口指向 hysplitGaussian。"""
-    print(f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}')
+    print(f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
     html_content = Path(
         'static/html/map_gaussian.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
         '"{{lon}}"': lon,
+        '{{city}}': city,
         '{{session}}': session,
     }
     for k, v in changes.items():
@@ -1876,20 +1888,45 @@ def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757', zoom: st
 
 
 @app.get('/map_backtrack')
-def show_map_backtrack(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4', session: str = '???'):
+def show_map_backtrack(lat: str = '39.906217', lon: str = '116.3912757',
+                       zoom: str = '4', session: str = '???', city: str = ''):
     """向前追溯的结果地图页，与 /map 同构，接口指向 hysplitBackward。"""
-    print(f'Loading map_backtrack, {lat=}, {lon=}, {zoom=}, {session=}')
+    print(f'Loading map_backtrack, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
     html_content = Path(
         'static/html/map_backtrack.html').read_text(encoding='utf-8')
     changes = {
         '"{{zoom}}"': zoom,
         '"{{lat}}"': lat,
         '"{{lon}}"': lon,
+        '{{city}}': city,
         '{{session}}': session,
     }
     for k, v in changes.items():
         html_content = html_content.replace(k, v)
     return HTMLResponse(content=html_content)
+
+
+@app.get('/get_city_stations')
+def get_city_stations(city: str = '', year: str = '', month: str = '',
+                      day: str = '', start_hour: str = '',
+                      duration_hours: str = ''):
+    """某个城市的监测点与模拟监测数据（地图页画标记用，也方便排查）。"""
+    from hysplit.stations import monitoring as _monitoring
+
+    def _int(v, default):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    window = {
+        'year': _int(year, 2024), 'month': _int(month, 5),
+        'day': _int(day, 2), 'start_hour': _int(start_hour, 0),
+        'duration_hours': _int(duration_hours, 24),
+    }
+    doc = _monitoring(city, window)
+    return HTMLResponse(json.dumps(doc, ensure_ascii=False),
+                        media_type='application/json')
 
 
 @app.get('/room')
@@ -2180,6 +2217,135 @@ def opt_number(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# 城市 + 监测点面板（三个扩散页面共用）
+# ---------------------------------------------------------------------------
+
+
+def mk_city_station_panel(default_city='北京'):
+    """在当前位置创建「城市 / 监测点 / 监测数据」控件组。
+
+    三个扩散页面（拉格朗日、高斯、追溯）都用它，差别只在后面调哪个
+    simulate 函数。监测点与监测数据来自 hysplit.stations，与传感器库无关。
+
+    返回的操作句柄：
+        city()      当前城市名
+        stations()  该城市的监测点（含 peak，直接喂给模拟）
+        reload()    按当前时段重读/重算监测数据并刷新表格与曲线
+        regenerate() 换一组监测数据（周期变了才会自动重算，这个强制换）
+        bind_window(fn) 注册「取当前时段」的回调，reload 时用它算时间轴
+        on_city_change(fn) 城市变化时额外要做的事（比如刷新地图）
+    """
+    state = {'doc': None, 'window_fn': None, 'city_fn': None}
+
+    ui.label('城市与监测点').classes('text-h6 mb-2')
+
+    city_select = ui.select(
+        options=city_names(), value=default_city, label='选择城市'
+    ).classes('w-full')
+
+    with ui.row().classes('w-full items-center gap-2 no-wrap'):
+        meta_label = ui.label('').classes('text-xs text-gray-500 flex-1')
+        regen_button = ui.button('重新生成', icon='autorenew').props(
+            'flat dense size=sm')
+
+    table = ui.table(
+        columns=[
+            {'name': 'station_id', 'label': '站点', 'field': 'station_id',
+             'align': 'left'},
+            {'name': 'name', 'label': '位置', 'field': 'name', 'align': 'left'},
+            {'name': 'value', 'label': '最新', 'field': 'value', 'align': 'right'},
+            {'name': 'peak', 'label': '峰值', 'field': 'peak', 'align': 'right'},
+        ],
+        rows=[], row_key='station_id',
+    ).classes('w-full text-xs').props('dense flat bordered')
+
+    chart = ui.echart({}).classes('w-full').style('height: 170px')
+
+    ui.label(VALUE_UNIT).classes('text-xs text-gray-500 -mt-1')
+
+    def current_window() -> dict:
+        fn = state['window_fn']
+        try:
+            return fn() if fn else {}
+        except Exception:
+            return {}
+
+    def fmt(v):
+        try:
+            return f'{float(v):.3f}'
+        except (TypeError, ValueError):
+            return '—'
+
+    def apply(doc):
+        state['doc'] = doc
+        table.rows = [{
+            'station_id': s['station_id'],
+            'name': s['name'],
+            'value': fmt(s['value']),
+            'peak': fmt(s['peak']),
+        } for s in doc['stations']]
+        table.update()
+
+        labels = doc.get('labels') or []
+        chart.options.clear()
+        chart.options.update({
+            'grid': {'left': 40, 'right': 10, 'top': 14, 'bottom': 24},
+            'tooltip': {'trigger': 'axis'},
+            'xAxis': {'type': 'category', 'data': labels,
+                      'axisLabel': {'fontSize': 9, 'hideOverlap': True}},
+            'yAxis': {'type': 'value', 'axisLabel': {'fontSize': 9}},
+            'series': [{
+                'name': s['station_id'],
+                'type': 'line',
+                'showSymbol': False,
+                'lineStyle': {'width': 1.2},
+                'data': s['series'],
+            } for s in doc['stations']],
+        })
+        chart.update()
+
+        peak = max(s['peak'] for s in doc['stations'])
+        peak_st = max(doc['stations'], key=lambda s: s['peak'])
+        meta_label.text = (
+            f"{doc['desc']} · {len(doc['stations'])} 个监测点 · "
+            f"峰值 {peak_st['station_id']} {peak:.3f} · "
+            f"{doc['window']['year']}-{doc['window']['month']:02d}-"
+            f"{doc['window']['day']:02d} {doc['window']['start_hour']}h "
+            f"/ {doc['n_hours']}h")
+
+    def reload(refresh=False):
+        doc = city_monitoring(city_select.value, current_window(),
+                              refresh=refresh)
+        apply(doc)
+        return doc
+
+    def on_city(e=None):
+        reload()
+        fn = state['city_fn']
+        if fn:
+            try:
+                fn(city_select.value)
+            except Exception:
+                pass
+
+    city_select.on_value_change(on_city)
+    regen_button.on('click', lambda: reload(refresh=True))
+
+    return {
+        'select': city_select,
+        'table': table,
+        'chart': chart,
+        'city': lambda: city_select.value,
+        'doc': lambda: state['doc'],
+        'stations': lambda: city_stations_for_simulation(
+            city_select.value, current_window()),
+        'reload': reload,
+        'bind_window': lambda fn: state.__setitem__('window_fn', fn),
+        'on_city_change': lambda fn: state.__setitem__('city_fn', fn),
+    }
 
 
 @ui.page('/simulationFDS')
@@ -2922,7 +3088,7 @@ async def simulation_page_hysplit():
     def collect_config():
         """收集界面参数。气象部分对计算结果没有影响，随运行存档。"""
         return {
-            'location': location_select.value,
+            'city': panel['city'](),
             'weather': weather_conditions.value,
             'temperature': float(temperature.value or 0),
             'humidity': float(humidity.value or 0),
@@ -2938,15 +3104,9 @@ async def simulation_page_hysplit():
         }
 
     def on_click():
-        reader = SensorDataReader()
-        sensors = reader.get_sensor_info()
-        for s in sensors:
-            try:
-                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
-            except:
-                pass
-
-        session = simulate_with_hysplit(sensors, config=collect_config())
+        # 释放点来自该城市的监测点，不再读传感器库
+        session = simulate_with_hysplit(
+            panel['stations'](), config=collect_config())
         update_map(session=session)
         update_simulation_history()
         refresh_status(session)
@@ -2957,27 +3117,19 @@ async def simulation_page_hysplit():
     simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
-    geo_candidates = LOCATION_CANDIDATES
-    default_zoom = 4
 
     # 左侧：地理 / 气象 / 计算设置
     with weather_card:
-        ui.label('地理位置').classes('text-h6 mb-4')
-
-        location_select = ui.select(
-            options=list(geo_candidates.keys()),
-            value='北京',
-            label='选择地点'
-        ).classes('w-full')
+        panel = mk_city_station_panel()
 
         zoom_input = ui.number(
-            value=default_zoom,
+            value=city_center(panel['city']())['zoom'],
             min=1,
             max=20,
             step=1,
             precision=0,
             label='地图缩放级别'
-        ).classes('w-full')
+        ).classes('w-full mb-4')
 
         ui.label('气象条件').classes('text-h6 mb-4')
 
@@ -3047,9 +3199,27 @@ async def simulation_page_hysplit():
             met_label.text = (f'气象文件：{n}' if d is not None
                               else f'⚠ 找不到气象文件 {n}，该日期无法计算')
 
-        for widget in (year_input, month_input, day_input):
-            widget.on_value_change(lambda e=None: show_met_file())
+        def panel_window():
+            """把当前时段交给监测点面板：时段一变，监测数据的横轴跟着变。"""
+            return {
+                'year': int(year_input.value or 2024),
+                'month': int(month_input.value or 5),
+                'day': int(day_input.value or 2),
+                'start_hour': int(start_hour_input.value or 0),
+                'duration_hours': int(duration_input.value or 24),
+            }
+
+        def on_window_change(e=None):
+            show_met_file()
+            panel['reload']()
+
+        for widget in (year_input, month_input, day_input,
+                       start_hour_input, duration_input):
+            widget.on_value_change(on_window_change)
         show_met_file()
+
+        panel['bind_window'](panel_window)
+        panel['reload']()
 
     # 右侧气体信息显示
     with gas_card:
@@ -3143,36 +3313,41 @@ async def simulation_page_hysplit():
         update_gas_inputs()
 
     def update_map(session='???'):
-        # 获取选择的地点
-        selected_location = location_select.value
-        if selected_location in geo_candidates:
-            geo = geo_candidates[selected_location]
-            zoom = zoom_input.value if zoom_input.value else geo['zoom']
+        """城市变了，地图中心/缩放跟着换；city 也传进去，未选会话时先画监测点。"""
+        city = panel['city']()
+        center = city_center(city)
+        zoom = zoom_input.value if zoom_input.value else center['zoom']
 
-            # 构建包含参数的 URL
-            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}&session={session}"
+        # 构建包含参数的 URL
+        params = (f"lat={center['lat']}&lon={center['lon']}&zoom={zoom}"
+                  f"&city={quote(str(city))}&session={session}")
 
-            # 更新 iframe 的 src 属性
-            js_code = f"""
+        # 更新 iframe 的 src 属性
+        js_code = f"""
             var iframe = document.getElementById('map-iframe');
             if (iframe) {{
                 iframe.src = '/map?{params}';
             }}
             """
-            ui.run_javascript(js_code)
+        ui.run_javascript(js_code)
 
-    # 绑定选择框变化事件
-    # location_select.on_change(update_map)
-    location_select.on('update:model-value', update_map)
+    def on_city_change(city):
+        zoom_input.value = city_center(city)['zoom']
+        update_map()
+
+    panel['on_city_change'](on_city_change)
     zoom_input.on_value_change(update_map)
 
     with map_card:
-        # 嵌入iframe来显示地图页面
+        # 嵌入iframe来显示地图页面。初始就带上城市，打开页面就能看到监测点
+        c0 = city_center(panel['city']())
+        src0 = (f"/map?lat={c0['lat']}&lon={c0['lon']}"
+                f"&zoom={zoom_input.value}&city={quote(str(panel['city']()))}")
         iframe = ui.html(f'''
 <div id='mapdiv'>
     <iframe
         id="map-iframe"
-        src="/map"
+        src="{src0}"
         style="width: 800px; height: 800px; border: none;"
         title="地图"
     ></iframe>
@@ -3253,7 +3428,7 @@ async def simulation_page_gaussian():
     def collect_config():
         """收集界面参数。气象部分对计算结果没有影响，随运行存档。"""
         return {
-            'location': location_select.value,
+            'city': panel['city'](),
             'weather': weather_conditions.value,
             'temperature': float(temperature.value or 0),
             'humidity': float(humidity.value or 0),
@@ -3269,16 +3444,9 @@ async def simulation_page_gaussian():
         }
 
     def on_click():
-        reader = SensorDataReader()
-        sensors = reader.get_sensor_info()
-        for s in sensors:
-            try:
-                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
-            except:
-                pass
-
+        # 释放点来自该城市的监测点，不再读传感器库
         session = simulate_with_hysplit_gaussian(
-            sensors, config=collect_config())
+            panel['stations'](), config=collect_config())
         update_map(session=session)
         update_simulation_history()
         refresh_status(session)
@@ -3289,27 +3457,19 @@ async def simulation_page_gaussian():
     simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
-    geo_candidates = LOCATION_CANDIDATES
-    default_zoom = 4
 
     # 左侧：地理 / 气象 / 计算设置
     with weather_card:
-        ui.label('地理位置').classes('text-h6 mb-4')
-
-        location_select = ui.select(
-            options=list(geo_candidates.keys()),
-            value='北京',
-            label='选择地点'
-        ).classes('w-full')
+        panel = mk_city_station_panel()
 
         zoom_input = ui.number(
-            value=default_zoom,
+            value=city_center(panel['city']())['zoom'],
             min=1,
             max=20,
             step=1,
             precision=0,
             label='地图缩放级别'
-        ).classes('w-full')
+        ).classes('w-full mb-4')
 
         ui.label('气象条件').classes('text-h6 mb-4')
 
@@ -3379,9 +3539,27 @@ async def simulation_page_gaussian():
             met_label.text = (f'气象文件：{n}' if d is not None
                               else f'⚠ 找不到气象文件 {n}，该日期无法计算')
 
-        for widget in (year_input, month_input, day_input):
-            widget.on_value_change(lambda e=None: show_met_file())
+        def panel_window():
+            """把当前时段交给监测点面板：时段一变，监测数据的横轴跟着变。"""
+            return {
+                'year': int(year_input.value or 2024),
+                'month': int(month_input.value or 5),
+                'day': int(day_input.value or 2),
+                'start_hour': int(start_hour_input.value or 0),
+                'duration_hours': int(duration_input.value or 24),
+            }
+
+        def on_window_change(e=None):
+            show_met_file()
+            panel['reload']()
+
+        for widget in (year_input, month_input, day_input,
+                       start_hour_input, duration_input):
+            widget.on_value_change(on_window_change)
         show_met_file()
+
+        panel['bind_window'](panel_window)
+        panel['reload']()
 
     # 右侧气体信息显示
     with gas_card:
@@ -3475,36 +3653,41 @@ async def simulation_page_gaussian():
         update_gas_inputs()
 
     def update_map(session='???'):
-        # 获取选择的地点
-        selected_location = location_select.value
-        if selected_location in geo_candidates:
-            geo = geo_candidates[selected_location]
-            zoom = zoom_input.value if zoom_input.value else geo['zoom']
+        """城市变了，地图中心/缩放跟着换；city 也传进去，未选会话时先画监测点。"""
+        city = panel['city']()
+        center = city_center(city)
+        zoom = zoom_input.value if zoom_input.value else center['zoom']
 
-            # 构建包含参数的 URL
-            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}&session={session}"
+        # 构建包含参数的 URL
+        params = (f"lat={center['lat']}&lon={center['lon']}&zoom={zoom}"
+                  f"&city={quote(str(city))}&session={session}")
 
-            # 更新 iframe 的 src 属性
-            js_code = f"""
+        # 更新 iframe 的 src 属性
+        js_code = f"""
             var iframe = document.getElementById('map-iframe');
             if (iframe) {{
                 iframe.src = '/map_gaussian?{params}';
             }}
             """
-            ui.run_javascript(js_code)
+        ui.run_javascript(js_code)
 
-    # 绑定选择框变化事件
-    # location_select.on_change(update_map)
-    location_select.on('update:model-value', update_map)
+    def on_city_change(city):
+        zoom_input.value = city_center(city)['zoom']
+        update_map()
+
+    panel['on_city_change'](on_city_change)
     zoom_input.on_value_change(update_map)
 
     with map_card:
-        # 嵌入iframe来显示地图页面
+        # 嵌入iframe来显示地图页面。初始就带上城市，打开页面就能看到监测点
+        c0 = city_center(panel['city']())
+        src0 = (f"/map_gaussian?lat={c0['lat']}&lon={c0['lon']}"
+                f"&zoom={zoom_input.value}&city={quote(str(panel['city']()))}")
         iframe = ui.html(f'''
 <div id='mapdiv'>
     <iframe
         id="map-iframe"
-        src="/map_gaussian"
+        src="{src0}"
         style="width: 800px; height: 800px; border: none;"
         title="地图"
     ></iframe>
@@ -3585,7 +3768,7 @@ async def simulation_page_backward():
     def collect_config():
         """收集界面参数。气象部分对计算结果没有影响，随运行存档。"""
         return {
-            'location': location_select.value,
+            'city': panel['city'](),
             'weather': weather_conditions.value,
             'temperature': float(temperature.value or 0),
             'humidity': float(humidity.value or 0),
@@ -3601,16 +3784,9 @@ async def simulation_page_backward():
         }
 
     def on_click():
-        reader = SensorDataReader()
-        sensors = reader.get_sensor_info()
-        for s in sensors:
-            try:
-                s['value'] = reader.get_latest_data(s['sensor_id'])[0]['value']
-            except:
-                pass
-
+        # 追溯起点来自该城市的监测点，不再读传感器库
         session = simulate_with_hysplit_backward(
-            sensors, config=collect_config())
+            panel['stations'](), config=collect_config())
         update_map(session=session)
         update_simulation_history()
         refresh_status(session)
@@ -3621,27 +3797,19 @@ async def simulation_page_backward():
     simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
-    geo_candidates = LOCATION_CANDIDATES
-    default_zoom = 4
 
     # 左侧：地理 / 气象 / 计算设置
     with weather_card:
-        ui.label('地理位置').classes('text-h6 mb-4')
-
-        location_select = ui.select(
-            options=list(geo_candidates.keys()),
-            value='北京',
-            label='选择地点'
-        ).classes('w-full')
+        panel = mk_city_station_panel()
 
         zoom_input = ui.number(
-            value=default_zoom,
+            value=city_center(panel['city']())['zoom'],
             min=1,
             max=20,
             step=1,
             precision=0,
             label='地图缩放级别'
-        ).classes('w-full')
+        ).classes('w-full mb-4')
 
         ui.label('气象条件').classes('text-h6 mb-4')
 
@@ -3711,9 +3879,27 @@ async def simulation_page_backward():
             met_label.text = (f'气象文件：{n}' if d is not None
                               else f'⚠ 找不到气象文件 {n}，该日期无法计算')
 
-        for widget in (year_input, month_input, day_input):
-            widget.on_value_change(lambda e=None: show_met_file())
+        def panel_window():
+            """把当前时段交给监测点面板：时段一变，监测数据的横轴跟着变。"""
+            return {
+                'year': int(year_input.value or 2024),
+                'month': int(month_input.value or 5),
+                'day': int(day_input.value or 2),
+                'start_hour': int(start_hour_input.value or 0),
+                'duration_hours': int(duration_input.value or 24),
+            }
+
+        def on_window_change(e=None):
+            show_met_file()
+            panel['reload']()
+
+        for widget in (year_input, month_input, day_input,
+                       start_hour_input, duration_input):
+            widget.on_value_change(on_window_change)
         show_met_file()
+
+        panel['bind_window'](panel_window)
+        panel['reload']()
 
     # 右侧气体信息显示
     with gas_card:
@@ -3807,36 +3993,41 @@ async def simulation_page_backward():
         update_gas_inputs()
 
     def update_map(session='???'):
-        # 获取选择的地点
-        selected_location = location_select.value
-        if selected_location in geo_candidates:
-            geo = geo_candidates[selected_location]
-            zoom = zoom_input.value if zoom_input.value else geo['zoom']
+        """城市变了，地图中心/缩放跟着换；city 也传进去，未选会话时先画监测点。"""
+        city = panel['city']()
+        center = city_center(city)
+        zoom = zoom_input.value if zoom_input.value else center['zoom']
 
-            # 构建包含参数的 URL
-            params = f"lat={geo['lat']}&lon={geo['lon']}&zoom={zoom}&session={session}"
+        # 构建包含参数的 URL
+        params = (f"lat={center['lat']}&lon={center['lon']}&zoom={zoom}"
+                  f"&city={quote(str(city))}&session={session}")
 
-            # 更新 iframe 的 src 属性
-            js_code = f"""
+        # 更新 iframe 的 src 属性
+        js_code = f"""
             var iframe = document.getElementById('map-iframe');
             if (iframe) {{
                 iframe.src = '/map_backtrack?{params}';
             }}
             """
-            ui.run_javascript(js_code)
+        ui.run_javascript(js_code)
 
-    # 绑定选择框变化事件
-    # location_select.on_change(update_map)
-    location_select.on('update:model-value', update_map)
+    def on_city_change(city):
+        zoom_input.value = city_center(city)['zoom']
+        update_map()
+
+    panel['on_city_change'](on_city_change)
     zoom_input.on_value_change(update_map)
 
     with map_card:
-        # 嵌入iframe来显示地图页面
+        # 嵌入iframe来显示地图页面。初始就带上城市，打开页面就能看到监测点
+        c0 = city_center(panel['city']())
+        src0 = (f"/map_backtrack?lat={c0['lat']}&lon={c0['lon']}"
+                f"&zoom={zoom_input.value}&city={quote(str(panel['city']()))}")
         iframe = ui.html(f'''
 <div id='mapdiv'>
     <iframe
         id="map-iframe"
-        src="/map_backtrack"
+        src="{src0}"
         style="width: 800px; height: 800px; border: none;"
         title="地图"
     ></iframe>

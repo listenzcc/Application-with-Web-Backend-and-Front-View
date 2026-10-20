@@ -36,20 +36,23 @@ from hysplit.mk_control import (
 from hysplit.mk_images import collect_and_generate_images
 from hysplit.simulate import (
     build_points,
+    build_station_marks,
+    read_stations,
     simulation_status,
     _run_exe,
     _met_dir_for_control,
     MET_DIR_CANDIDATES,
     DEFAULT_CONFIG as FORWARD_DEFAULT_CONFIG,
-    DEFAULT_BBOX,
-    BBOX_LAT1, BBOX_LAT2, BBOX_LON1, BBOX_LON2,
+    LEGACY_BBOX,
     TEMPLATE_DIR as FORWARD_TEMPLATE_DIR,
     HYSPLIT_EXEC, HYSPLIT_GRAPHICS,
     SESSION_TS_FMT,
-    CONFIG_NAME, SENSORS_NAME, SUCCESS_MARKER, FAILED_MARKER,
+    CONFIG_NAME, STATIONS_NAME, SENSORS_NAME, SUCCESS_MARKER, FAILED_MARKER,
     FRAMES_NAME, TABLE_NAME, IMG_DIR, GIF_NAME, LOG_NAME,
     CONTROL_NAME, CDUMP_NAME,
 )
+from hysplit.stations import (city_bbox, city_center, resolve_city,
+                              stations_for_simulation)
 
 # %%
 # python/hysplit_backward/simulate.py -> python/hysplit_backward -> python -> <root>
@@ -94,13 +97,20 @@ def merge_config(config: dict = None) -> dict:
     """界面传来的 config 与默认值合并。None 值不覆盖默认值。
 
     注意：duration_hours 是负数也要能传进来，所以这里不能简单
-    判 falsy，必须只挡 None。
+    判 falsy，必须只挡 None。城市与计算域的处理与拉格朗日模型一致。
     """
     merged = dict(DEFAULT_CONFIG)
     if config:
         for k, v in config.items():
             if v is not None:
                 merged[k] = v
+
+    merged['city'] = resolve_city(merged.get('city'))
+    bbox = merged.get('bbox')
+    if not isinstance(bbox, dict) or not {'lat1', 'lat2', 'lon1', 'lon2'} <= set(bbox):
+        bbox = city_bbox(merged['city'])
+    merged['bbox'] = {k: float(bbox[k]) for k in ('lat1', 'lat2', 'lon1', 'lon2')}
+    merged['city_center'] = city_center(merged['city'])
     return merged
 
 
@@ -219,17 +229,21 @@ def _win(p: Path) -> str:
 # ---- 跑模型 ----
 
 
-def simulate_with_hysplit_backward(sensors: list, session: str = None,
+def simulate_with_hysplit_backward(stations: list = None, session: str = None,
                                    config: dict = None) -> str:
-    """起一次向前追溯计算（后台进程），立刻返回 session。"""
+    """起一次向前追溯计算（后台进程），立刻返回 session。
+
+    stations 省略时按 config['city'] 现场生成城市监测点（含监测数据）。
+    """
     session = session or mk_hysplit_backward_session()
     cfg = merge_config(config)
+    stations = stations or stations_for_simulation(cfg['city'], cfg)
 
     dst = simulation_dir(session)
     dst.mkdir(parents=True, exist_ok=True)
 
-    (dst / SENSORS_NAME).write_text(
-        json.dumps(sensors or [], ensure_ascii=False, indent=2),
+    (dst / STATIONS_NAME).write_text(
+        json.dumps(stations, ensure_ascii=False, indent=2),
         encoding='utf-8')
     (dst / CONFIG_NAME).write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -241,14 +255,14 @@ def simulate_with_hysplit_backward(sensors: list, session: str = None,
             pass
 
     p = mp.Process(target=_run_hysplit_backward_job,
-                   kwargs=dict(sensors=sensors or [], config=cfg,
+                   kwargs=dict(stations=stations, config=cfg,
                                session=session),
                    daemon=False)
     p.start()
     return session
 
 
-def _run_hysplit_backward_job(sensors: list, config: dict, session: str):
+def _run_hysplit_backward_job(stations: list, config: dict, session: str):
     """后台工作进程：准备文件 -> 跑模型 -> 后处理 -> 写标记。"""
     dst = simulation_dir(session)
     started = time.time()
@@ -271,14 +285,14 @@ def _run_hysplit_backward_job(sensors: list, config: dict, session: str):
 
     log(f'HYSPLIT backward job start: {session}')
     try:
-        # 1) 释放点（即追溯起点，通常是监测到污染的传感器位置）
-        points = build_points(sensors, config)
+        # 1) 释放点（即追溯起点，取城市监测点的位置）
+        points = build_points(stations, config)
         if not points:
-            finish(FAILED_MARKER, '失败：没有可用的传感器作为追溯起点')
+            finish(FAILED_MARKER, '失败：没有可用的监测点作为追溯起点')
             return
         if sum(p['mass'] for p in points) <= 0:
             finish(FAILED_MARKER,
-                   '失败：所有传感器读数都是空的，没有有效释放质量')
+                   '失败：所有监测点读数都是空的，没有有效释放质量')
             return
 
         # 2) 气象文件：要覆盖整段回溯时间，可能不止一个周文件
@@ -387,8 +401,8 @@ def get_hysplit_backward_simulation_template(session: str) -> str:
         return ''
 
 
-def build_environment(dst: Path, config: dict, sensors: list) -> dict:
-    """前端画图需要的环境信息：经纬度框、追溯起点、气象来源。"""
+def build_environment(dst: Path, config: dict, stations: list) -> dict:
+    """前端画图需要的环境信息：城市、经纬度框、追溯起点、气象来源。"""
     year = int(config.get('year') or 0)
     month = int(config.get('month') or 0)
     day = int(config.get('day') or 0)
@@ -396,18 +410,27 @@ def build_environment(dst: Path, config: dict, sensors: list) -> dict:
         year, month, day) if year and month and day else ''
 
     release_points = []
-    for p in build_points(sensors, config):
+    for p in build_points(stations, config):
         release_points.append({
+            'station_id': p['station_id'],
             'sensor_id': p['sensor_id'],
+            'name': p['name'],
             'lon': round(p['lon'], 4),
             'lat': round(p['lat'], 4),
             'height': p['height'],
             'mass': p['mass'],
         })
 
+    city = resolve_city(config.get('city'))
+    bbox = config.get('bbox') if isinstance(config.get('bbox'), dict) else None
+    if not bbox:
+        bbox = city_bbox(city) if config.get('city') else LEGACY_BBOX
+
     duration = int(config.get('duration_hours') or 0)
     return {
-        **DEFAULT_BBOX,
+        **{k: float(bbox[k]) for k in ('lat1', 'lat2', 'lon1', 'lon2')},
+        'city': city if config.get('city') else '',
+        'city_center': config.get('city_center') or city_center(city),
         'top_height': float(config.get('top_height') or 0),
         'release_height': float(config.get('release_height') or 0),
         'year': year, 'month': month, 'day': day,
@@ -417,6 +440,7 @@ def build_environment(dst: Path, config: dict, sensors: list) -> dict:
         'met_file': met_name,
         'weather_mode': config.get('weather_mode', 'file'),
         'release_points': release_points,
+        'stations': build_station_marks(stations),
     }
 
 
@@ -455,7 +479,7 @@ def get_hysplit_backward_simulation_result(session: str) -> dict:
     config = _read_json(dst / CONFIG_NAME, {}) or {}
     out['config'] = config
 
-    sensors = _read_json(dst / SENSORS_NAME, []) or []
+    stations = read_stations(dst)
 
     frames_doc = _read_json(dst / FRAMES_NAME, {}) or {}
     out['frames'] = frames_doc.get('frames') or []
@@ -467,7 +491,7 @@ def get_hysplit_backward_simulation_result(session: str) -> dict:
         out['gif'] = GIF_NAME
 
     out['template'] = get_hysplit_backward_simulation_template(session)
-    out['environment'] = build_environment(dst, config, sensors)
+    out['environment'] = build_environment(dst, config, stations)
 
     return out
 
