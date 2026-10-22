@@ -49,7 +49,7 @@ from pathlib import Path
 from .mk_control import mk_control, mk_emitimes, met_file_name, weather_data_folder
 from .mk_images import collect_and_generate_images
 from .stations import (city_bbox, city_center, resolve_city,
-                       stations_for_simulation)
+                       stations_for_simulation, DEFAULT_CITY)
 
 # %%
 # python/hysplit/simulate.py -> python/hysplit -> python -> <root>
@@ -110,7 +110,7 @@ LOCATION_CANDIDATES = _location_candidates()
 
 DEFAULT_CONFIG = {
     # ---- 界面上的地理 / 气象（气象部分不参与计算，随运行存档）----
-    'city': '北京',
+    'city': DEFAULT_CITY,
     'weather': '晴',
     'temperature': 20.0,
     'humidity': 50.0,
@@ -166,7 +166,8 @@ def merge_config(config: dict = None) -> dict:
     bbox = merged.get('bbox')
     if not isinstance(bbox, dict) or not {'lat1', 'lat2', 'lon1', 'lon2'} <= set(bbox):
         bbox = city_bbox(merged['city'])
-    merged['bbox'] = {k: float(bbox[k]) for k in ('lat1', 'lat2', 'lon1', 'lon2')}
+    merged['bbox'] = {k: float(bbox[k])
+                      for k in ('lat1', 'lat2', 'lon1', 'lon2')}
     merged['city_center'] = city_center(merged['city'])
     return merged
 

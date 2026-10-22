@@ -80,6 +80,7 @@ from hysplit.stations import (
     monitoring as city_monitoring,
     stations_for_simulation as city_stations_for_simulation,
     VALUE_UNIT,
+    DEFAULT_CITY
 )
 from hysplit_gaussian.simulate import (
     simulate_with_hysplit_gaussian,
@@ -1872,7 +1873,8 @@ def show_map(lat: str = '39.906217', lon: str = '116.3912757', zoom: str = '4',
 def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757',
                       zoom: str = '4', session: str = '???', city: str = ''):
     """高斯模型的结果地图页，与 /map 同构，接口指向 hysplitGaussian。"""
-    print(f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
+    print(
+        f'Loading map_gaussian, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
     html_content = Path(
         'static/html/map_gaussian.html').read_text(encoding='utf-8')
     changes = {
@@ -1891,7 +1893,8 @@ def show_map_gaussian(lat: str = '39.906217', lon: str = '116.3912757',
 def show_map_backtrack(lat: str = '39.906217', lon: str = '116.3912757',
                        zoom: str = '4', session: str = '???', city: str = ''):
     """向前追溯的结果地图页，与 /map 同构，接口指向 hysplitBackward。"""
-    print(f'Loading map_backtrack, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
+    print(
+        f'Loading map_backtrack, {lat=}, {lon=}, {zoom=}, {session=}, {city=}')
     html_content = Path(
         'static/html/map_backtrack.html').read_text(encoding='utf-8')
     changes = {
@@ -2224,7 +2227,7 @@ def opt_number(value):
 # ---------------------------------------------------------------------------
 
 
-def mk_city_station_panel(default_city='北京'):
+def mk_city_station_panel(default_city=DEFAULT_CITY):
     """在当前位置创建「城市 / 监测点 / 监测数据」控件组。
 
     三个扩散页面（拉格朗日、高斯、追溯）都用它，差别只在后面调哪个
@@ -3139,16 +3142,34 @@ async def simulation_page_hysplit():
         ).classes('w-full mb-2')
 
         temperature = ui.number(
-            label='温度(℃)', value=20, min=-50, max=50
+            label='温度(℃)', value=20,  # min=-30, max=40,
+            validation={
+                '不能小于 -30': lambda v: v is None or v >= -30,
+                '不能大于 40': lambda v: v is None or v <= 40,
+            },
         ).classes('w-full mb-2')
+        temperature.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if temperature.value is not None and (
+            temperature.value < -30 or temperature.value > 40) else None)
 
         humidity = ui.number(
-            label='湿度(%)', value=50, min=0, max=100
+            label='湿度(%)', value=50,  # , min=0, max=100,
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 100': lambda v: v is None or v <= 100,
+            },
         ).classes('w-full mb-2')
+        humidity.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if humidity.value is not None and (
+            humidity.value < 0 or humidity.value > 100) else None)
 
         wind_speed = ui.number(
-            label='风力(级)', value=3, min=0, max=12
+            label='风力(级)', value=3,  # min=0, max=12
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 12': lambda v: v is None or v <= 12,
+            },
         ).classes('w-full mb-2')
+        wind_speed.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if wind_speed.value is not None and (
+            wind_speed.value < 0 or wind_speed.value > 12) else None)
 
         wind_direction = ui.select(
             options=WIND_DIRECTIONS, value='东',
@@ -3479,17 +3500,34 @@ async def simulation_page_gaussian():
         ).classes('w-full mb-2')
 
         temperature = ui.number(
-            label='温度(℃)', value=20, min=-50, max=50
+            label='温度(℃)', value=20,  # min=-30, max=40,
+            validation={
+                '不能小于 -30': lambda v: v is None or v >= -30,
+                '不能大于 40': lambda v: v is None or v <= 40,
+            },
         ).classes('w-full mb-2')
+        temperature.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if temperature.value is not None and (
+            temperature.value < -30 or temperature.value > 40) else None)
 
         humidity = ui.number(
-            label='湿度(%)', value=50, min=0, max=100
+            label='湿度(%)', value=50,  # , min=0, max=100,
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 100': lambda v: v is None or v <= 100,
+            },
         ).classes('w-full mb-2')
+        humidity.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if humidity.value is not None and (
+            humidity.value < 0 or humidity.value > 100) else None)
 
         wind_speed = ui.number(
-            label='风力(级)', value=3, min=0, max=12
+            label='风力(级)', value=3,  # min=0, max=12
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 12': lambda v: v is None or v <= 12,
+            },
         ).classes('w-full mb-2')
-
+        wind_speed.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if wind_speed.value is not None and (
+            wind_speed.value < 0 or wind_speed.value > 12) else None)
         wind_direction = ui.select(
             options=WIND_DIRECTIONS, value='东',
             label='风向'
@@ -3819,16 +3857,34 @@ async def simulation_page_backward():
         ).classes('w-full mb-2')
 
         temperature = ui.number(
-            label='温度(℃)', value=20, min=-50, max=50
+            label='温度(℃)', value=20,  # min=-30, max=40,
+            validation={
+                '不能小于 -30': lambda v: v is None or v >= -30,
+                '不能大于 40': lambda v: v is None or v <= 40,
+            },
         ).classes('w-full mb-2')
+        temperature.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if temperature.value is not None and (
+            temperature.value < -30 or temperature.value > 40) else None)
 
         humidity = ui.number(
-            label='湿度(%)', value=50, min=0, max=100
+            label='湿度(%)', value=50,  # , min=0, max=100,
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 100': lambda v: v is None or v <= 100,
+            },
         ).classes('w-full mb-2')
+        humidity.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if humidity.value is not None and (
+            humidity.value < 0 or humidity.value > 100) else None)
 
         wind_speed = ui.number(
-            label='风力(级)', value=3, min=0, max=12
+            label='风力(级)', value=3,  # min=0, max=12
+            validation={
+                '不能小于 0': lambda v: v is None or v >= 0,
+                '不能大于 12': lambda v: v is None or v <= 12,
+            },
         ).classes('w-full mb-2')
+        wind_speed.on('blur', lambda: ui.notify('请检查数值范围', type='warning') if wind_speed.value is not None and (
+            wind_speed.value < 0 or wind_speed.value > 12) else None)
 
         wind_direction = ui.select(
             options=WIND_DIRECTIONS, value='东',
