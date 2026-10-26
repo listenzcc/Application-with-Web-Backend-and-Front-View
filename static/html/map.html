@@ -216,9 +216,11 @@
         <div id="hudRow2">
             <label class="chk"><input id="contourChk" type="checkbox" checked> 危险区等值线</label>
             <span class="swatch" style="background:#f08c00"></span>
-            <label>致伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
-            <span class="swatch" style="background:#c1121f"></span>
-            <label>致死 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <label>轻伤 ≥ <input id="lvl1Input" class="num" type="number" step="any"></label>
+            <span class="swatch" style="background:#d9480f"></span>
+            <label>重伤 ≥ <input id="lvl2Input" class="num" type="number" step="any"></label>
+            <span class="swatch" style="background:#a50f15"></span>
+            <label>致死 ≥ <input id="lvl3Input" class="num" type="number" step="any"></label>
             <span id="contourNote">—</span>
         </div>
         <div id="legendLine">
@@ -264,6 +266,7 @@
             showContour: true,
             lvl1: null,
             lvl2: null,
+            lvl3: null,
             lvlInit: false,
             pointsCache: new Map(),   // 帧号 -> 该帧散点
             gridCache: new Map(),     // 帧号 -> 该帧规则网格
@@ -534,11 +537,13 @@
             const onLevelInput = () => {
                 state.lvl1 = Number($('lvl1Input').value);
                 state.lvl2 = Number($('lvl2Input').value);
+                state.lvl3 = Number($('lvl3Input').value);
                 state.lvlInit = true;
                 drawContours();
             };
             $('lvl1Input').addEventListener('input', onLevelInput);
             $('lvl2Input').addEventListener('input', onLevelInput);
+            $('lvl3Input').addEventListener('input', onLevelInput);
             $('contourChk').addEventListener('change', (e) => {
                 state.showContour = e.target.checked;
                 drawContours();
@@ -780,7 +785,7 @@
         }
 
         // ------------------------------------------------------------------
-        // 危险区等值线（致伤 / 致死）
+        // 危险区等值线（轻伤 / 重伤 / 致死）
         // ------------------------------------------------------------------
 
         // con2asc 吐出来的浓度点落在 HYSPLIT 的原生浓度网格上（默认 0.05°，
@@ -790,8 +795,9 @@
         const GRID_PAD = 5;
 
         const CONTOUR_STYLE = {
-            lvl1: { line: '#f08c00', fill: '#f08c00', fillOpacity: 0.20, width: 2.5, label: '致伤区' },
-            lvl2: { line: '#c1121f', fill: '#c1121f', fillOpacity: 0.30, width: 3, label: '致死区' },
+            lvl1: { line: '#f08c00', fill: '#f08c00', fillOpacity: 0.20, width: 2.5, label: '轻伤区' },
+            lvl2: { line: '#d9480f', fill: '#d9480f', fillOpacity: 0.28, width: 3, label: '重伤区' },
+            lvl3: { line: '#a50f15', fill: '#a50f15', fillOpacity: 0.35, width: 3.5, label: '致死区' },
         };
 
         const EMPTY_FC = { type: 'FeatureCollection', features: [] };
@@ -799,8 +805,10 @@
         const CONTOUR_LAYERS = [
             { id: 'contour-fill-lvl1', type: 'fill', src: 'contour-fill-src-lvl1', key: 'lvl1' },
             { id: 'contour-fill-lvl2', type: 'fill', src: 'contour-fill-src-lvl2', key: 'lvl2' },
+            { id: 'contour-fill-lvl3', type: 'fill', src: 'contour-fill-src-lvl3', key: 'lvl3' },
             { id: 'contour-line-lvl1', type: 'line', src: 'contour-line-src-lvl1', key: 'lvl1' },
             { id: 'contour-line-lvl2', type: 'line', src: 'contour-line-src-lvl2', key: 'lvl2' },
+            { id: 'contour-line-lvl3', type: 'line', src: 'contour-line-src-lvl3', key: 'lvl3' },
         ];
 
         function fmtNum(v) {
@@ -892,7 +900,7 @@
         }
 
         function clearContours() {
-            ['lvl1', 'lvl2'].forEach((key) => {
+            ['lvl1', 'lvl2', 'lvl3'].forEach((key) => {
                 setContourData(key, 'fill', []);
                 setContourData(key, 'line', []);
             });
@@ -914,8 +922,8 @@
             const grid = frameGrid(frame, points);
             const found = {};
 
-            // 致死区在致伤区里面，所以填充顺序也是从低阈值到高阈值
-            for (const key of ['lvl1', 'lvl2']) {
+            // 致死区在最里面，填充顺序从低阈值到高阈值
+            for (const key of ['lvl1', 'lvl2', 'lvl3']) {
                 const level = Number(state[key]);
                 if (!isFinite(level)) {
                     found[key] = null;
@@ -958,7 +966,7 @@
             if (!found) { el.textContent = '—'; return; }
 
             const parts = [];
-            for (const key of ['lvl1', 'lvl2']) {
+            for (const key of ['lvl1', 'lvl2', 'lvl3']) {
                 const label = `${CONTOUR_STYLE[key].label} ≥ ${fmtNum(state[key])}`;
                 const n = found[key];
                 if (n === null || n === undefined) parts.push(`${label} 未设`);
@@ -986,16 +994,19 @@
                 const n = Number(v);
                 return isFinite(n) ? Number(n.toPrecision(4)) : fallback;
             };
-            // 没存过阈值就按量程取。0.35 / 0.60 是拿两套真实结果试出来的：
+            // 没存过阈值就按量程取。0.35 / 0.475 / 0.60 是拿真实结果试出来的：
             // 低一点整片都是危险区，高一点又只剩几个点
             state.lvl1 = pick(cfg.lvl1, Number((lo + span * 0.35).toPrecision(4)));
-            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.60).toPrecision(4)));
+            state.lvl2 = pick(cfg.lvl2, Number((lo + span * 0.475).toPrecision(4)));
+            state.lvl3 = pick(cfg.lvl3, Number((lo + span * 0.60).toPrecision(4)));
             $('lvl1Input').value = state.lvl1;
             $('lvl2Input').value = state.lvl2;
+            $('lvl3Input').value = state.lvl3;
 
             const step = (span / 100).toPrecision(2);
             $('lvl1Input').step = step;
             $('lvl2Input').step = step;
+            $('lvl3Input').step = step;
 
             state.lvlInit = true;
         }

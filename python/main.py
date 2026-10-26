@@ -3104,6 +3104,7 @@ async def simulation_page_hysplit():
             'duration_hours': int(duration_input.value or 0),
             'lvl1': opt_number(lvl1_input.value),
             'lvl2': opt_number(lvl2_input.value),
+            'lvl3': opt_number(lvl3_input.value),
         }
 
     def on_click():
@@ -3197,11 +3198,13 @@ async def simulation_page_hysplit():
         ).classes('w-full mt-1').props('dense outlined')
 
         # 危险区阈值只影响「怎么看结果」，不影响 HYSPLIT 计算。
-        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        # 留空的话，查看结果时按本次量程自动取 35% / 47.5% / 60% 处。
         ui.label('危险区阈值（等值线）').classes('text-h6 mt-4 mb-2')
-        lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+        lvl1_input = ui.number('轻伤 lvl1', value=None, step=0.01
                                ).classes('w-full mb-2').props('dense outlined clearable')
-        lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+        lvl2_input = ui.number('重伤 lvl2', value=None, step=0.01
+                               ).classes('w-full mb-2').props('dense outlined clearable')
+        lvl3_input = ui.number('致死 lvl3', value=None, step=0.01
                                ).classes('w-full').props('dense outlined clearable')
         ui.label('阈值与色标同单位（log10 相对值）').classes(
             'text-xs text-gray-500 mt-1')
@@ -3462,6 +3465,7 @@ async def simulation_page_gaussian():
             'duration_hours': int(duration_input.value or 0),
             'lvl1': opt_number(lvl1_input.value),
             'lvl2': opt_number(lvl2_input.value),
+            'lvl3': opt_number(lvl3_input.value),
         }
 
     def on_click():
@@ -3554,11 +3558,13 @@ async def simulation_page_gaussian():
         ).classes('w-full mt-1').props('dense outlined')
 
         # 危险区阈值只影响「怎么看结果」，不影响 HYSPLIT 计算。
-        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        # 留空的话，查看结果时按本次量程自动取 35% / 47.5% / 60% 处。
         ui.label('危险区阈值（等值线）').classes('text-h6 mt-4 mb-2')
-        lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+        lvl1_input = ui.number('轻伤 lvl1', value=None, step=0.01
                                ).classes('w-full mb-2').props('dense outlined clearable')
-        lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+        lvl2_input = ui.number('重伤 lvl2', value=None, step=0.01
+                               ).classes('w-full mb-2').props('dense outlined clearable')
+        lvl3_input = ui.number('致死 lvl3', value=None, step=0.01
                                ).classes('w-full').props('dense outlined clearable')
         ui.label('阈值与色标同单位（log10 相对值）').classes(
             'text-xs text-gray-500 mt-1')
@@ -3819,6 +3825,7 @@ async def simulation_page_backward():
             'duration_hours': int(duration_input.value or 0),
             'lvl1': opt_number(lvl1_input.value),
             'lvl2': opt_number(lvl2_input.value),
+            'lvl3': opt_number(lvl3_input.value),
         }
 
     def on_click():
@@ -3912,11 +3919,13 @@ async def simulation_page_backward():
         ).classes('w-full mt-1').props('dense outlined')
 
         # 危险区阈值只影响「怎么看结果」，不影响 HYSPLIT 计算。
-        # 留空的话，查看结果时按本次量程自动取 35% / 60% 处。
+        # 留空的话，查看结果时按本次量程自动取 35% / 47.5% / 60% 处。
         ui.label('危险区阈值（等值线）').classes('text-h6 mt-4 mb-2')
-        lvl1_input = ui.number('致伤 lvl1', value=None, step=0.01
+        lvl1_input = ui.number('轻伤 lvl1', value=None, step=0.01
                                ).classes('w-full mb-2').props('dense outlined clearable')
-        lvl2_input = ui.number('致死 lvl2', value=None, step=0.01
+        lvl2_input = ui.number('重伤 lvl2', value=None, step=0.01
+                               ).classes('w-full mb-2').props('dense outlined clearable')
+        lvl3_input = ui.number('致死 lvl3', value=None, step=0.01
                                ).classes('w-full').props('dense outlined clearable')
         ui.label('阈值与色标同单位（log10 相对值）').classes(
             'text-xs text-gray-500 mt-1')

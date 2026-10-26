@@ -245,6 +245,12 @@
         <div id="hudRow">
             <button id="playBtn" class="btn" title="播放 / 暂停" disabled>▶ 播放</button>
             <input id="frameRange" type="range" min="0" max="0" step="1" value="0" disabled>
+            <select id="skipSelect" class="btn" title="拖动时间轴时每格跨多少模拟时间" disabled>
+                <option value="5" selected>5 秒/格</option>
+                <option value="10">10 秒/格</option>
+                <option value="30">30 秒/格</option>
+                <option value="60">60 秒/格</option>
+            </select>
             <button id="devcBtn" class="btn" title="显示 FDS 里 DEVC 检测点的时间序列">检测点波形</button>
             <button id="templateBtn" class="btn" title="查看本次实际使用的输入卡">查看 CONTROL</button>
         </div>
@@ -967,6 +973,8 @@
             range.min = 0;
             range.max = Math.max(0, frames.length - 1);
             range.disabled = frames.length < 1;
+            $('skipSelect').disabled = frames.length < 2;
+            applySkipGear();
             $('playBtn').disabled = frames.length < 2;
             setFrameLabel();
 
@@ -1117,9 +1125,37 @@
         // 播放控制
         // ------------------------------------------------------------------
         function onFrameInput() {
-            state.index = parseInt($('frameRange').value, 10) || 0;
+            const raw = parseInt($('frameRange').value, 10) || 0;
+            // 按档位吸附到格点，最后一帧兜底
+            const idx = state.frames.length
+                ? Math.min(state.frames.length - 1,
+                    Math.round(raw / skipFrames) * skipFrames)
+                : raw;
+            if (idx !== raw) $('frameRange').value = idx;
+            state.index = idx;
             setFrameLabel();
             showFrame(state.index);
+        }
+
+        // 拖动档位：一格跨多少模拟时间。帧间距不一定是 5s（由输出间隔决定），
+        // 按实测帧间距的中位数把档位换算成帧数。range 的 step 保持 1：
+        // 原生大 step 会把滑块吸附到格点，帧数不整除时末尾几帧就拖不到了，
+        // 所以改成拖动后在 onFrameInput 里吸附。
+        let skipFrames = 1;
+
+        function applySkipGear() {
+            if (state.frames.length < 2) { skipFrames = 1; return; }
+            const diffs = [];
+            for (let i = 1; i < state.frames.length; i++) {
+                const a = Number(state.frames[i - 1].time);
+                const b = Number(state.frames[i].time);
+                if (isFinite(a) && isFinite(b) && b - a > 0) diffs.push(b - a);
+            }
+            const dt = diffs.length
+                ? diffs.sort((x, y) => x - y)[Math.floor(diffs.length / 2)]
+                : 0;
+            const gear = Number($('skipSelect').value) || 5;
+            skipFrames = dt > 0 ? Math.max(1, Math.round(gear / dt)) : 1;
         }
 
         function togglePlay() {
@@ -1143,6 +1179,7 @@
         // 交互绑定
         // ------------------------------------------------------------------
         $('frameRange').addEventListener('input', onFrameInput);
+        $('skipSelect').addEventListener('change', applySkipGear);
         $('playBtn').addEventListener('click', togglePlay);
         $('lvl1Input').addEventListener('input', onLevelInput);
         $('lvl2Input').addEventListener('input', onLevelInput);

@@ -124,9 +124,10 @@ DEFAULT_CONFIG = {
     'output_interval_minutes': 100,
     'weather_mode': 'file',
     # 危险区阈值（与色标同单位，log10 相对值）。留空则查看结果时按量程自动取，
-    # 这两个值只是「看结果」的参数，不参与 HYSPLIT 计算本身。
+    # 这几个值只是「看结果」的参数，不参与 HYSPLIT 计算本身。
     'lvl1': None,
     'lvl2': None,
+    'lvl3': None,
 }
 
 # %%
