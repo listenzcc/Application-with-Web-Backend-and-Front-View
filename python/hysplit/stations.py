@@ -53,6 +53,7 @@ CITIES = {
             ('SH-06', '北厂界', 0.7, 1.6, '厂界'),
             ('SH-07', '办公区', -2.0, 1.8, '敏感点'),
             ('SH-08', '下风向 3km', -3.7, -2.7, '敏感点'),
+            ('SH-09', '厂区1', 0.1, 0.1, '厂区'),
         ],
     },
     '唐山': {
@@ -358,7 +359,7 @@ def stations_for_simulation(city: str, config: dict = None,
 if __name__ == '__main__':
     for cname in city_names():
         doc = monitoring(cname, {'year': 2024, 'month': 5, 'day': 2,
-                                 'start_hour': 0, 'duration_hours': 24})
+                                 'start_hour': 0, 'duration_hours': 24}, True)
         print(f"{cname:4s} {doc['slug']:9s} {len(doc['stations'])} 站 "
               f"峰值 {max(s['peak'] for s in doc['stations']):.3f} "
               f"最新最大 {doc['max_latest']:.3f} "
