@@ -136,6 +136,15 @@ user_service = UserService(session)
 permission_manager = PermissionManager(session)
 auth_context = AuthContext(user_service, permission_manager)
 
+
+def current_user_can(perm_name: str) -> bool:
+    """判断当前登录用户是否拥有某项权限（权限-角色映射见 conf/permission.yml）。"""
+    uid = app.storage.user.get('id')
+    if uid is None:
+        return False
+    user = user_service.get_user_by_id(uid)
+    return user is not None and permission_manager.check_permission(user, perm_name)
+
 try:
     # 3. 创建测试用户
     # 创建普通用户
@@ -2475,9 +2484,14 @@ async def simulation_page_fds():
                   on_click=add_obstacle).props('flat dense')
 
     # ---- 控制条 ----
+    can_compute = current_user_can('computation')
     with ui.row().classes('w-[1400px] justify-center items-end gap-2'):
-        simulate_button = ui.button(
-            '开始 CFD 模型计算', icon='play_arrow').props('color=primary')
+        if can_compute:
+            simulate_button = ui.button(
+                '开始 CFD 模型计算', icon='play_arrow').props('color=primary')
+        else:
+            ui.label('当前账号没有 computation 权限，无法提交仿真任务').classes(
+                'text-sm text-gray-500')
         simulation_history_select = ui.select(
             options={}, label='载入历史模拟', with_input=True).classes('w-[520px]')
         refresh_history_button = ui.button(
@@ -2640,6 +2654,10 @@ async def simulation_page_fds():
         }
 
     def on_click_start():
+        if not current_user_can('computation'):
+            ui.notify('当前账号没有 computation 权限，无法提交仿真任务',
+                      color='negative')
+            return
         if not str(spec_input.value or '').strip():
             ui.notify('请先填写 FDS 组分名 (SPEC_ID)', color='negative')
             return
@@ -2673,7 +2691,8 @@ async def simulation_page_fds():
         status_label.text = f'正在计算：{session}'
         ui.notify(f'已提交模拟：{session}', color='positive')
 
-    simulate_button.on('click', on_click_start)
+    if current_user_can('computation'):
+        simulate_button.on('click', on_click_start)
     refresh_history_button.on('click', lambda: (
         update_simulation_history(),
         ui.notify('历史列表已刷新'),
@@ -2789,8 +2808,12 @@ async def simulation_page_fds3d():
 
             ui.separator()
 
-            simulate_button = ui.button(
-                '开始三维 CFD 计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+            if current_user_can('computation'):
+                simulate_button = ui.button(
+                    '开始三维 CFD 计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+            else:
+                ui.label('当前账号没有 computation 权限，无法提交仿真任务').classes(
+                    'text-sm text-gray-500')
 
         view_card = ui.card().classes('w-[820px] h-[820px] p-0 m-0')
         gas_card = ui.card().classes('w-[300px] p-4 shadow-lg')
@@ -2970,6 +2993,10 @@ async def simulation_page_fds3d():
             + ('' if guess else '　（FDS 组分名以输入卡里的 &SPEC 为准）'))
 
     def on_click_start():
+        if not current_user_can('computation'):
+            ui.notify('当前账号没有 computation 权限，无法提交仿真任务',
+                      color='negative')
+            return
         text = fds_editor.value or ''
         try:
             # 提交前再校验一遍，报错信息直接摆给用户
@@ -3002,7 +3029,8 @@ async def simulation_page_fds3d():
         status_label.text = f'正在计算：{session}'
         ui.notify(f'已提交三维模拟：{session}', color='positive')
 
-    simulate_button.on('click', on_click_start)
+    if current_user_can('computation'):
+        simulate_button.on('click', on_click_start)
     refresh_history_button.on('click', lambda: (
         update_simulation_history(),
         ui.notify('历史列表已刷新'),
@@ -3041,8 +3069,12 @@ async def simulation_page_hysplit():
 
         ui.separator()
 
-        simulate_button = ui.button(
-            '开始拉格朗日模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        if current_user_can('computation'):
+            simulate_button = ui.button(
+                '开始拉格朗日模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        else:
+            ui.label('当前账号没有 computation 权限，无法提交仿真任务').classes(
+                'text-sm text-gray-500')
 
         ui.separator()
 
@@ -3108,6 +3140,10 @@ async def simulation_page_hysplit():
         }
 
     def on_click():
+        if not current_user_can('computation'):
+            ui.notify('当前账号没有 computation 权限，无法提交仿真任务',
+                      color='negative')
+            return
         # 释放点来自该城市的监测点，不再读传感器库
         session = simulate_with_hysplit(
             panel['stations'](), config=collect_config())
@@ -3118,7 +3154,8 @@ async def simulation_page_hysplit():
         ui.notify(
             f'模拟已在后台开始，Session: {session}', color='positive')
 
-    simulate_button.on('click', on_click)
+    if current_user_can('computation'):
+        simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
 
@@ -3402,8 +3439,12 @@ async def simulation_page_gaussian():
 
         ui.separator()
 
-        simulate_button = ui.button(
-            '开始高斯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        if current_user_can('computation'):
+            simulate_button = ui.button(
+                '开始高斯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        else:
+            ui.label('当前账号没有 computation 权限，无法提交仿真任务').classes(
+                'text-sm text-gray-500')
 
         ui.separator()
 
@@ -3469,6 +3510,10 @@ async def simulation_page_gaussian():
         }
 
     def on_click():
+        if not current_user_can('computation'):
+            ui.notify('当前账号没有 computation 权限，无法提交仿真任务',
+                      color='negative')
+            return
         # 释放点来自该城市的监测点，不再读传感器库
         session = simulate_with_hysplit_gaussian(
             panel['stations'](), config=collect_config())
@@ -3479,7 +3524,8 @@ async def simulation_page_gaussian():
         ui.notify(
             f'模拟已在后台开始，Session: {session}', color='positive')
 
-    simulate_button.on('click', on_click)
+    if current_user_can('computation'):
+        simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
 
@@ -3762,8 +3808,12 @@ async def simulation_page_backward():
 
         ui.separator()
 
-        simulate_button = ui.button(
-            '开始追溯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        if current_user_can('computation'):
+            simulate_button = ui.button(
+                '开始追溯模型计算', icon='play_arrow').props('color=primary').classes('w-full text-xl')
+        else:
+            ui.label('当前账号没有 computation 权限，无法提交仿真任务').classes(
+                'text-sm text-gray-500')
 
         ui.separator()
 
@@ -3829,6 +3879,10 @@ async def simulation_page_backward():
         }
 
     def on_click():
+        if not current_user_can('computation'):
+            ui.notify('当前账号没有 computation 权限，无法提交仿真任务',
+                      color='negative')
+            return
         # 追溯起点来自该城市的监测点，不再读传感器库
         session = simulate_with_hysplit_backward(
             panel['stations'](), config=collect_config())
@@ -3839,7 +3893,8 @@ async def simulation_page_backward():
         ui.notify(
             f'模拟已在后台开始，Session: {session}', color='positive')
 
-    simulate_button.on('click', on_click)
+    if current_user_can('computation'):
+        simulate_button.on('click', on_click)
 
     gases = gas_db.search_gases()
 
